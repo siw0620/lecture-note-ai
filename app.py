@@ -6,7 +6,7 @@ import io
 from google import genai
 from openai import AsyncOpenAI
 
-# 문서 파일 파싱용 라이브러리 (설치되어 있을 경우 자동 활성화)
+# 문서 파일 파싱용 라이브러리
 try:
     from pypdf import PdfReader
     HAS_PDF = True
@@ -33,8 +33,8 @@ openrouter_client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key
 deepseek_client = AsyncOpenAI(base_url="https://api.deepseek.com", api_key=deepseek_key) if deepseek_key else None
 cerebras_client = AsyncOpenAI(base_url="https://api.cerebras.ai/v1", api_key=cerebras_key) if cerebras_key else None
 
-st.set_page_page_config = st.set_page_config(page_title="Ultra AI 수업 & 파일 만능 분석기", layout="wide")
-st.title("🎓 Ultra Multi-AI 만능 파일 분석 및 학습 솔루션")
+st.set_page_config(page_title="Ultra AI 수업 & 대용량 파일 만능 분석기", layout="wide")
+st.title("🎓 Ultra Multi-AI 대용량 파일 통합 분석 시스템")
 
 # 사이드바 설정
 st.sidebar.header("⚙️ AI 엔진 및 요약 설정")
@@ -52,8 +52,12 @@ note_style = st.sidebar.selectbox(
     ["개조식 핵심 요약 (-함/-습 체)", "스토리텔링 친절한 설명형", "시험 직전 1분 요약형"]
 )
 
-# 파일 업로드 제한을 두지 않아 어떤 파일이든 업로드 가능
-uploaded_file = st.file_uploader("📂 오디오, 동영상, PDF, Word, TXT, 소스코드 등 어떤 파일이든 업로드하세요", type=None)
+# 다중 파일 업로드 허용
+uploaded_files = st.file_uploader(
+    "📂 대용량 음성녹음, 동영상, PDF, Word, 소스코드 등을 한번에 올려주세요 (25MB 초과 파일 자동 대응)", 
+    type=None, 
+    accept_multiple_files=True
+)
 
 async def call_ai(provider, prompt):
     try:
@@ -76,90 +80,108 @@ async def call_ai(provider, prompt):
         return f"[{provider} 통신 오류]: {str(e)}"
     return f"[{provider}] API 키가 설정되지 않았습니다."
 
-if uploaded_file is not None:
-    stt_text = ""
-    file_name = uploaded_file.name
-    file_ext = file_name.split(".")[-1].lower()
-    file_bytes = uploaded_file.getvalue()
+if uploaded_files:
+    combined_text_list = []
+    st.info(f"📁 총 {len(uploaded_files)}개의 파일이 업로드되었습니다. 처리 중...")
 
-    # 1. 오디오 및 미디어 파일 처리 (Groq Whisper)
-    audio_extensions = ["wav", "mp3", "m4a", "ogg", "flac", "aac", "webm", "mp4", "mpeg", "mpga"]
-    
-    if file_ext in audio_extensions:
-        if groq_client:
-            with st.spinner(f"🎙️ 미디어 파일({file_ext})을 Groq Whisper AI로 초고속 음성 인식 중..."):
-                try:
-                    transcription = asyncio.run(groq_client.audio.transcriptions.create(
-                        file=(file_name, file_bytes, f"audio/{file_ext}" if file_ext != "mp4" else "video/mp4"),
-                        model="whisper-large-v3",
-                        language="ko",
-                        response_format="text"
-                    ))
-                    stt_text = str(transcription).strip()
-                    st.success("✅ 음성/미디어 텍스트 변환(STT) 완료!")
-                except Exception as e:
-                    st.error(f"❌ 음성 변환 중 오류 발생: {e}")
-        else:
-            st.error("❌ GROQ_API_KEY가 필요합니다.")
+    for file in uploaded_files:
+        file_name = file.name
+        file_ext = file_name.split(".")[-1].lower()
+        file_bytes = file.getvalue()
+        file_text = ""
+        file_size_mb = len(file_bytes) / (1024 * 1024)
 
-    # 2. PDF 문서 파일 처리
-    elif file_ext == "pdf":
-        if HAS_PDF:
-            with st.spinner("📄 PDF 문서 텍스트 추출 중..."):
+        audio_extensions = ["wav", "mp3", "m4a", "ogg", "flac", "aac", "webm", "mp4", "mpeg", "mpga"]
+
+        # 1. 음성 및 미디어 파일 처리 (25MB 이하: Groq Whisper / 25MB 초과: Gemini 대용량 분석)
+        if file_ext in audio_extensions:
+            if file_size_mb <= 25 and groq_client:
+                with st.spinner(f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) Groq Whisper 초고속 변환 중..."):
+                    try:
+                        transcription = asyncio.run(groq_client.audio.transcriptions.create(
+                            file=(file_name, file_bytes, f"audio/{file_ext}" if file_ext != "mp4" else "video/mp4"),
+                            model="whisper-large-v3",
+                            language="ko",
+                            response_format="text"
+                        ))
+                        file_text = str(transcription).strip()
+                        st.success(f"✅ '{file_name}' Groq 변환 완료")
+                    except Exception as e:
+                        st.error(f"❌ '{file_name}' Groq 변환 오류: {e}")
+            elif gemini_client:
+                with st.spinner(f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) 대용량 파일 Gemini 멀티모달 분석 중..."):
+                    try:
+                        mime_type = f"audio/{file_ext}" if file_ext != "mp4" else "video/mp4"
+                        # Gemini SDK를 통한 대용량 바이너리 직접 전송
+                        res = await asyncio.to_thread(
+                            gemini_client.models.generate_content,
+                            model='gemini-1.5-flash',
+                            contents=[
+                                {"mime_type": mime_type, "data": file_bytes},
+                                "이 음성/동영상 파일의 모든 대화 내용을 빠짐없이 한국어로 텍스트로 받아적어줘(STT)."
+                            ]
+                        )
+                        file_text = res.text.strip()
+                        st.success(f"✅ '{file_name}' Gemini 대용량 분석 완료")
+                    except Exception as e:
+                        st.error(f"❌ '{file_name}' Gemini 분석 오류: {e}")
+            else:
+                st.error("❌ API 키(GROQ_API_KEY 또는 GEMINI_API_KEY) 설정을 확인해주세요.")
+
+        # 2. PDF 문서 파일
+        elif file_ext == "pdf":
+            if HAS_PDF:
                 try:
                     reader = PdfReader(io.BytesIO(file_bytes))
                     extracted = [page.extract_text() for page in reader.pages if page.extract_text()]
-                    stt_text = "\n".join(extracted)
-                    st.success("✅ PDF 텍스트 추출 완료!")
+                    file_text = "\n".join(extracted)
+                    st.success(f"✅ '{file_name}' PDF 추출 완료")
                 except Exception as e:
-                    st.error(f"❌ PDF 읽기 오류: {e}")
-        else:
-            st.error("❌ pypdf 라이브러리가 설치되지 않았습니다.")
+                    st.error(f"❌ '{file_name}' 읽기 오류: {e}")
+            else:
+                st.error("❌ pypdf 라이브러리가 필요합니다.")
 
-    # 3. Word(docx) 문서 파일 처리
-    elif file_ext in ["docx", "doc"]:
-        if HAS_DOCX:
-            with st.spinner("📝 Word 문서 텍스트 추출 중..."):
+        # 3. Word 문서 파일
+        elif file_ext in ["docx", "doc"]:
+            if HAS_DOCX:
                 try:
                     doc = docx.Document(io.BytesIO(file_bytes))
                     extracted = [p.text for p in doc.paragraphs if p.text]
-                    stt_text = "\n".join(extracted)
-                    st.success("✅ Word 문서 읽기 완료!")
+                    file_text = "\n".join(extracted)
+                    st.success(f"✅ '{file_name}' Word 추출 완료")
                 except Exception as e:
-                    st.error(f"❌ Word 읽기 오류: {e}")
+                    st.error(f"❌ '{file_name}' 읽기 오류: {e}")
+            else:
+                st.error("❌ python-docx 라이브러리가 필요합니다.")
+
+        # 4. 일반 텍스트 및 소스코드 파일
         else:
-            st.error("❌ python-docx 라이브러리가 설치되지 않았습니다.")
+            for encoding in ["utf-8", "cp949", "euc-kr", "latin-1"]:
+                try:
+                    file_text = file_bytes.decode(encoding)
+                    st.success(f"✅ '{file_name}' 파일 읽기 완료")
+                    break
+                except UnicodeDecodeError:
+                    continue
 
-    # 4. 일반 텍스트 및 소스코드 파일 (TXT, C, C++, Python, MD, CSV 등)
-    else:
-        success = False
-        for encoding in ["utf-8", "cp949", "euc-kr", "latin-1"]:
-            try:
-                stt_text = file_bytes.decode(encoding)
-                success = True
-                break
-            except UnicodeDecodeError:
-                continue
-        
-        if success:
-            st.success(f"✅ 파일 로드 완료 ({file_ext.upper()} 형식)")
-        else:
-            st.error(f"❌ 파일의 인코딩을 읽을 수 없습니다. 지원되는 텍스트/미디어 형식이 맞는지 확인해주세요.")
+        if file_text:
+            combined_text_list.append(f"--- [파일명: {file_name}] ---\n{file_text}")
 
-    # 텍스트가 정상 추출/변환되었을 때 분석 버튼 활성화
-    if stt_text:
-        with st.expander("📄 추출/변환된 원본 내용 미리보기"):
-            st.text(stt_text[:2000] + ("..." if len(stt_text) > 2000 else ""))
+    full_combined_text = "\n\n".join(combined_text_list)
 
-        if st.button("🚀 종합 학습 노트 & 예상 문제 생성", type="primary"):
-            with st.spinner("🤖 다중 AI 엔진들이 데이터를 정밀 분석하고 있습니다..."):
+    if full_combined_text:
+        with st.expander("📄 추출된 전체 파일 통합 텍스트 확인"):
+            st.text_area("통합 데이터 내용", full_combined_text, height=200)
+
+        if st.button("🚀 전체 파일 통합 AI 학습 노트 생성", type="primary"):
+            with st.spinner("🤖 AI가 업로드된 모든 파일의 데이터 분석 중..."):
                 async def process_pipeline():
                     if ai_mode == "다중 AI 교차 검증 (권장)":
                         g_res, q_res = await asyncio.gather(
-                            call_ai("Gemini", f"내용 요약:\n{stt_text}"),
-                            call_ai("Groq", f"내용 요약:\n{stt_text}")
+                            call_ai("Gemini", f"통합 내용 요약:\n{full_combined_text}"),
+                            call_ai("Groq", f"통합 내용 요약:\n{full_combined_text}")
                         )
-                        cross_p = f"[Gemini 요약]: {g_res}\n[Llama 요약]: {q_res}\n두 분석을 교차 검증하여 완성도 높은 노트로 정리해줘. 스타일: {note_style}"
+                        cross_p = f"[Gemini 요약]: {g_res}\n[Llama 요약]: {q_res}\n두 분석을 교차 검증하여 깔끔한 노트로 정리해줘. 스타일: {note_style}"
                         final_note = await call_ai("Gemini", cross_p)
                     else:
                         engine_map = {
@@ -169,10 +191,10 @@ if uploaded_file is not None:
                             "Cerebras Llama 3.1": "Cerebras",
                             "OpenRouter (Free Auto)": "OpenRouter"
                         }
-                        final_note = await call_ai(engine_map[selected_single_ai], f"내용 요약 (스타일: {note_style}):\n{stt_text}")
+                        final_note = await call_ai(engine_map[selected_single_ai], f"통합 내용 요약 (스타일: {note_style}):\n{full_combined_text}")
 
-                    dict_task = call_ai("Gemini", f"핵심 용어 5개 및 암기 플래시카드(Q&A 5개) 생성:\n{stt_text}")
-                    exam_task = call_ai("Groq", f"시험/평가 예상 문제 4개(객관식 3, 서술형 1)와 정답/해설 작성:\n{stt_text}")
+                    dict_task = call_ai("Gemini", f"핵심 용어 5개 및 암기 플래시카드(Q&A 5개) 생성:\n{full_combined_text}")
+                    exam_task = call_ai("Groq", f"시험/평가 예상 문제 4개(객관식 3, 서술형 1)와 정답/해설 작성:\n{full_combined_text}")
                     
                     dictionary, exam = await asyncio.gather(dict_task, exam_task)
                     return final_note, dictionary, exam
@@ -181,12 +203,12 @@ if uploaded_file is not None:
                 st.session_state['note'] = note
                 st.session_state['dict'] = dictionary
                 st.session_state['exam'] = exam
-                st.session_state['stt_text'] = stt_text
+                st.session_state['stt_text'] = full_combined_text
 
     if 'note' in st.session_state:
         t1, t2, t3, t4 = st.tabs(["📝 통합 요약 노트", "💡 용어 & 플래시카드", "🎯 예상 문제", "💬 AI Q&A 챗봇"])
         with t1:
-            st.subheader("📌 교차 검증 요약 노트")
+            st.subheader("📌 교차 검증 통합 노트")
             st.markdown(st.session_state['note'])
         with t2:
             st.subheader("💡 주요 용어 및 암기 카드")
@@ -196,7 +218,7 @@ if uploaded_file is not None:
             st.markdown(st.session_state['exam'])
         with t4:
             st.subheader("💬 AI 심화 Q&A 질문하기")
-            q = st.text_input("자료 내용 중 이해가 안 되는 부분을 자유롭게 질문하세요:")
+            q = st.text_input("통합 파일 내용에 대한 질문을 자유롭게 입력하세요:")
             if q:
-                ans = asyncio.run(call_ai("Cerebras" if cerebras_key else "Gemini", f"자료 내용:{st.session_state['stt_text']}\n질문:{q}"))
+                ans = asyncio.run(call_ai("Cerebras" if cerebras_key else "Gemini", f"통합 내용:{st.session_state['stt_text']}\n질문:{q}"))
                 st.info(ans)
