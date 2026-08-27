@@ -148,7 +148,6 @@ def call_ai(provider, prompt):
 # 🚀 파일이 업로드된 상태에서 전송 버튼을 눌렀을 때만 분석 시작
 if uploaded_files:
     st.markdown("---")
-    # 전송 버튼 배치
     if st.button("🚀 업로드한 파일 분석 전송하기", type="primary", use_container_width=True):
         combined_text_list = []
         
@@ -213,7 +212,11 @@ if uploaded_files:
 
                             status.update(label=f"📤 구글 서버로 업로드 중...")
                             with open(temp_file_path, "rb") as f:
-                                gemini_file = gemini_client.files.upload(file=f, config={'display_name': 'audio_file'})
+                                # 💡 핵심 수정: mime_type을 명시적으로 지정하여 Mime type 에러 완벽 해결
+                                gemini_file = gemini_client.files.upload(
+                                    file=f, 
+                                    config={'display_name': 'audio_file', 'mime_type': 'audio/mp3'}
+                                )
 
                             status.update(label=f"⏳ 서버 처리 대기 중...")
                             while gemini_file.state.name == "PROCESSING":
