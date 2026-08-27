@@ -43,8 +43,8 @@ openrouter_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=open
 deepseek_client = OpenAI(base_url="https://api.deepseek.com", api_key=deepseek_key) if deepseek_key else None
 cerebras_client = OpenAI(base_url="https://api.cerebras.ai/v1", api_key=cerebras_key) if cerebras_key else None
 
-st.set_page_config(page_title="Ultra AI 수업 & 대용량 파일 만능 분석기", layout="wide")
-st.title("🎓 Ultra Multi-AI 대용량 파일 통합 분석 시스템")
+st.set_page_config(page_title="Wald des Wissens - 지식의 숲", layout="wide")
+st.title("🌲 Wald des Wissens (지식의 숲) : 대용량 파일 통합 분석 시스템")
 
 # 🔄 새로고침(리로딩) 버튼 기능 구현
 if st.sidebar.button("🔄 파일 및 화면 리로딩 (초기화)", use_container_width=True):
@@ -60,7 +60,7 @@ def save_to_browser_storage(data_dict):
     components.html(f"""
         <script>
             try {{
-                localStorage.setItem('ultra_ai_drive_backup', {json.dumps(json_str)});
+                localStorage.setItem('wald_des_wissens_backup', {json.dumps(json_str)});
             }} catch (e) {{
                 console.error("Storage save failed", e);
             }}
@@ -101,7 +101,7 @@ if 'note' in st.session_state:
     st.sidebar.download_button(
         label="📥 구글 드라이브 백업 파일 다운로드",
         data=json_str,
-        file_name="google_drive_study_backup.json",
+        file_name="wald_des_wissens_backup.json",
         mime="application/json",
         use_container_width=True
     )
@@ -118,7 +118,6 @@ if uploaded_backup is not None:
     except Exception as e:
         st.sidebar.error(f"❌ 파일 형식이 올바르지 않습니다: {e}")
 
-# 다중 파일 업로드 허용
 uploaded_files = st.file_uploader(
     "📂 대용량 음성녹음, 동영상, PDF, Word, 소스코드 등을 한번에 올려주세요 (대용량 음성 자동 압축 탑재)", 
     type=None, 
@@ -126,32 +125,38 @@ uploaded_files = st.file_uploader(
 )
 
 def call_ai(provider, prompt):
-    try:
-        if provider == "Gemini" and gemini_client:
-            # 💡 최신 권장 모델 gemini-3.6-flash 적용
-            try:
-                res = gemini_client.models.generate_content(model='gemini-3.6-flash', contents=prompt)
-                return res.text
-            except Exception:
-                res = gemini_client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-                return res.text
-        elif provider == "Groq" and groq_client:
-            res = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
-            return res.choices[0].message.content
-        elif provider == "DeepSeek" and deepseek_client:
-            res = deepseek_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
-            return res.choices[0].message.content
-        elif provider == "Cerebras" and cerebras_client:
-            res = cerebras_client.chat.completions.create(model="llama3.1-70b", messages=[{"role": "user", "content": prompt}])
-            return res.choices[0].message.content
-        elif provider == "OpenRouter" and openrouter_client:
-            res = openrouter_client.chat.completions.create(model="meta-llama/llama-3.3-70b-instruct:free", messages=[{"role": "user", "content": prompt}])
-            return res.choices[0].message.content
-    except Exception as e:
-        return f"[{provider} 통신 오류]: {str(e)}"
-    return f"[{provider}] API 키가 설정되지 않았습니다."
+    """지정한 AI로 요청을 보내고 실패 시 다른 사용 가능한 AI로 자동 대체(Fallback)하는 상호 보완 함수"""
+    providers_order = [provider, "Gemini", "Cerebras", "DeepSeek", "Groq", "OpenRouter"]
+    seen = set()
+    ordered_providers = [p for p in providers_order if not (p in seen or seen.add(p))]
 
-# 🚀 파일이 업로드된 상태에서 전송 버튼을 눌렀을 때만 분석 시작
+    for p in ordered_providers:
+        try:
+            if p == "Gemini" and gemini_client:
+                try:
+                    res = gemini_client.models.generate_content(model='gemini-3.6-flash', contents=prompt)
+                    if res and res.text: return res.text
+                except Exception:
+                    res = gemini_client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+                    if res and res.text: return res.text
+            elif p == "Groq" and groq_client:
+                res = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
+                if res.choices[0].message.content: return res.choices[0].message.content
+            elif p == "DeepSeek" and deepseek_client:
+                res = deepseek_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
+                if res.choices[0].message.content: return res.choices[0].message.content
+            elif p == "Cerebras" and cerebras_client:
+                res = cerebras_client.chat.completions.create(model="llama3.1-70b", messages=[{"role": "user", "content": prompt}])
+                if res.choices[0].message.content: return res.choices[0].message.content
+            elif p == "OpenRouter" and openrouter_client:
+                res = openrouter_client.chat.completions.create(model="meta-llama/llama-3.3-70b-instruct:free", messages=[{"role": "user", "content": prompt}])
+                if res.choices[0].message.content: return res.choices[0].message.content
+        except Exception:
+            continue
+            
+    return "[모든 AI 통신 실패]: 사용 가능한 AI 엔진이 없습니다."
+
+# 🚀 파일 분석 전송
 if uploaded_files:
     st.markdown("---")
     if st.button("🚀 업로드한 파일 분석 전송하기", type="primary", use_container_width=True):
@@ -199,9 +204,8 @@ if uploaded_files:
 
                     transcription_success = False
                     
-                    # 1차 시도: Groq Whisper 이용
                     if groq_client and len(processed_audio_bytes) <= 24 * 1024 * 1024:
-                        status.update(label=f"🎙️ '{file_name}' Groq Whisper 변환 중...")
+                        status.update(label=f"🎙️ '{file_name}' Groq Whisper 변환 시도 중...")
                         try:
                             transcription = groq_client.audio.transcriptions.create(
                                 file=(f"audio_{unique_id}.mp3", processed_audio_bytes, "audio/mp3"),
@@ -212,11 +216,10 @@ if uploaded_files:
                             file_text = str(transcription).strip()
                             transcription_success = True
                         except Exception as e:
-                            st.warning(f"⚠️ Groq 변환 제한 초과/에러 발생, Gemini 우회 분석으로 전환합니다: {e}")
+                            st.warning(f"⚠️ Groq 음성 변환 실패, Gemini 우회 전환: {e}")
 
-                    # 2차 시도: Gemini 멀티모달 분석 우회 (`gemini-3.6-flash` 사용)
                     if not transcription_success and gemini_client:
-                        status.update(label=f"🔄 '{file_name}' 파일을 Gemini 대용량 멀티모달 분석 방식으로 우회 전사 중...")
+                        status.update(label=f"🔄 '{file_name}' 파일을 Gemini 대용량 분석으로 안전하게 우회 처리 중...")
                         try:
                             temp_gemini_path = f"gemini_temp_{unique_id}.{file_ext}"
                             with open(temp_gemini_path, "wb") as f:
@@ -237,13 +240,13 @@ if uploaded_files:
 
                             g_ans = gemini_client.models.generate_content(
                                 model='gemini-3.6-flash',
-                                contents=[g_file_res, "이 음성/영상 파일의 전체 내용을 빠짐없이 한국어 텍스트로 상세히 전사(STT)해줘."]
+                                contents=[g_file_res, "이 음성/영상 파일의 전체 내용을 빠짐없이 한국어 텍스트로 상세히 전사해줘."]
                             )
                             file_text = g_ans.text
                             transcription_success = True
-                            st.success(f"✅ '{file_name}' Gemini 우회 전사 완료!")
+                            st.success(f"✅ '{file_name}' 안전 우회 전사 완료!")
                         except Exception as ge:
-                            st.error(f"❌ Gemini 우회 전사 실패: {ge}")
+                            st.error(f"❌ 음성 전사 최종 실패: {ge}")
 
                 elif file_ext == "pdf":
                     if HAS_PDF:
@@ -271,14 +274,15 @@ if uploaded_files:
         full_combined_text = "\n\n".join(combined_text_list)
 
         if full_combined_text:
-            with st.status("🤖 Groq 메인 초안 작성 및 멀티 AI 교차 검증 중...", expanded=True) as ai_status:
+            with st.status("🤖 멀티 AI 상호 교차 검증 및 노트 생성 중...", expanded=True) as ai_status:
                 
-                st.write("📌 [1/3] Groq 초안 작성 및 타 AI 교차 검증 진행 중...")
+                st.write("📌 [1/3] 상호 보완 요약 노트 작성 중...")
                 if ai_mode == "다중 AI 교차 검증 (권장)":
-                    q_res = call_ai("Groq", f"통합 내용 요약:\n{full_combined_text}")
-                    g_res = call_ai("Gemini", f"통합 내용 요약:\n{full_combined_text}")
-                    cross_p = f"[Groq 메인 초안]: {q_res}\n[Gemini 검토 의견]: {g_res}\n위 내용을 바탕으로 Groq의 분석을 중심으로 하되 Gemini의 의견을 반영하여 상호 교차 검증된 가장 완벽한 최종 노트로 정리해줘. 스타일: {note_style}"
-                    final_note = call_ai("Groq", cross_p)
+                    primary_draft = call_ai("Groq", f"통합 내용 요약:\n{full_combined_text}")
+                    reviewer_opinion = call_ai("Gemini", f"통합 내용 요약:\n{full_combined_text}")
+                    
+                    cross_prompt = f"[메인 초안]: {primary_draft}\n[교차 검토 의견]: {reviewer_opinion}\n위 내용을 바탕으로 두 AI의 장점을 결합하여 상호 보완된 가장 완벽한 최종 노트로 정리해줘. 스타일: {note_style}"
+                    final_note = call_ai("Cerebras", cross_prompt)
                 else:
                     engine_map = {
                         "Groq Llama 3.3": "Groq", 
@@ -290,12 +294,12 @@ if uploaded_files:
                     final_note = call_ai(engine_map[selected_single_ai], f"통합 내용 요약 (스타일: {note_style}):\n{full_combined_text}")
 
                 st.write("💡 [2/3] 핵심 용어 및 플래시카드 생성 중...")
-                dictionary = call_ai("Groq", f"핵심 용어 5개 및 암기 플래시카드(Q&A 5개) 생성:\n{full_combined_text}")
+                dictionary = call_ai("Cerebras", f"핵심 용어 5개 및 암기 플래시카드(Q&A 5개) 생성:\n{full_combined_text}")
 
                 st.write("🎯 [3/3] 시험 출제 예상 문제 제작 중...")
-                exam = call_ai("Groq", f"시험/평가 예상 문제 4개(객관식 3, 서술형 1)와 정답/해설 작성:\n{full_combined_text}")
+                exam = call_ai("Gemini", f"시험/평가 예상 문제 4개(객관식 3, 서술형 1)와 정답/해설 작성:\n{full_combined_text}")
 
-                ai_status.update(label="✨ Groq 중심 분석 및 교차 검증이 완료되었습니다!", state="complete", expanded=False)
+                ai_status.update(label="✨ 모든 AI의 상호 보완 검증이 완료되었습니다!", state="complete", expanded=False)
 
             st.session_state['note'] = final_note
             st.session_state['dict'] = dictionary
