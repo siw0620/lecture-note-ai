@@ -93,7 +93,7 @@ if uploaded_files:
 
         audio_extensions = ["wav", "mp3", "m4a", "ogg", "flac", "aac", "webm", "mp4", "mpeg", "mpga"]
 
-        # 1. 음성 및 미디어 파일 처리 (25MB 이하: Groq Whisper / 25MB 초과: Gemini 대용량 분석)
+        # 1. 음성 및 미디어 파일 처리
         if file_ext in audio_extensions:
             if file_size_mb <= 25 and groq_client:
                 with st.spinner(f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) Groq Whisper 초고속 변환 중..."):
@@ -112,9 +112,8 @@ if uploaded_files:
                 with st.spinner(f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) 대용량 파일 Gemini 멀티모달 분석 중..."):
                     try:
                         mime_type = f"audio/{file_ext}" if file_ext != "mp4" else "video/mp4"
-                        # Gemini SDK를 통한 대용량 바이너리 직접 전송
-                        res = await asyncio.to_thread(
-                            gemini_client.models.generate_content,
+                        # 에러를 방지하기 위해 일반 동기 방식으로 Gemini 호출
+                        res = gemini_client.models.generate_content(
                             model='gemini-1.5-flash',
                             contents=[
                                 {"mime_type": mime_type, "data": file_bytes},
