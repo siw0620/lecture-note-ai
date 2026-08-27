@@ -43,8 +43,55 @@ openrouter_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=open
 deepseek_client = OpenAI(base_url="https://api.deepseek.com", api_key=deepseek_key) if deepseek_key else None
 cerebras_client = OpenAI(base_url="https://api.cerebras.ai/v1", api_key=cerebras_key) if cerebras_key else None
 
-st.set_page_config(page_title="Wald des Wissens - 지식의 숲", layout="wide")
-st.title("🌲 Wald des Wissens (지식의 숲) : 대용량 파일 통합 분석 시스템")
+st.set_page_config(page_title="NINJAGO - Wald des Wissens", layout="wide")
+
+# 🥷 닌자고 스타일 커스텀 CSS (날카로운 타이포 및 노란색 마스크 테마)
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Teko:wght@600;700&display=swap');
+    
+    .ninjago-header {
+        background: linear-gradient(135deg, #FFD700 0%, #FFC000 100%);
+        padding: 20px 30px;
+        border-radius: 6px;
+        border: 3px solid #111;
+        box-shadow: 4px 4px 0px #111;
+        margin-bottom: 25px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    
+    .ninjago-title {
+        font-family: 'Teko', sans-serif;
+        font-size: 48px;
+        font-weight: 700;
+        color: #111;
+        letter-spacing: 2px;
+        line-height: 1;
+        text-transform: uppercase;
+        margin: 0;
+    }
+    
+    .ninjago-subtitle {
+        font-family: sans-serif;
+        font-size: 14px;
+        font-weight: 800;
+        color: #222;
+        letter-spacing: 1px;
+        margin-top: 5px;
+        text-transform: uppercase;
+    }
+    </style>
+    
+    <div class="ninjago-header">
+        <div>
+            <div class="ninjago-title">NINJAGO : Wald des Wissens</div>
+            <div class="ninjago-subtitle">⚡ Multi-AI Cross-Verification & Analysis System</div>
+        </div>
+        <div style="font-size: 36px;">🥷</div>
+    </div>
+""", unsafe_allow_html=True)
 
 # 🔄 새로고침(리로딩) 버튼 기능 구현
 if st.sidebar.button("🔄 파일 및 화면 리로딩 (초기화)", use_container_width=True):
@@ -60,7 +107,7 @@ def save_to_browser_storage(data_dict):
     components.html(f"""
         <script>
             try {{
-                localStorage.setItem('wald_des_wissens_backup', {json.dumps(json_str)});
+                localStorage.setItem('ninjago_wald_backup', {json.dumps(json_str)});
             }} catch (e) {{
                 console.error("Storage save failed", e);
             }}
@@ -101,7 +148,7 @@ if 'note' in st.session_state:
     st.sidebar.download_button(
         label="📥 구글 드라이브 백업 파일 다운로드",
         data=json_str,
-        file_name="wald_des_wissens_backup.json",
+        file_name="ninjago_wald_backup.json",
         mime="application/json",
         use_container_width=True
     )
