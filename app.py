@@ -7,7 +7,7 @@ import uuid
 import streamlit.components.v1 as components
 
 from google import genai
-from google.genai import types # 💡 Gemini 설정 객체 임포트 추가
+from google.genai import types
 from openai import OpenAI
 
 # 음성 압축용 pydub 라이브러리 및 문서 라이브러리 확인
@@ -75,7 +75,7 @@ selected_single_ai = "Groq Llama 3.3"
 if ai_mode == "단일 AI 신속 분석":
     selected_single_ai = st.sidebar.selectbox(
         "사용할 AI 모델 선택",
-        ["Groq Llama 3.3", "Gemini 2.0 Flash", "DeepSeek V3", "Cerebras Llama 3.1", "OpenRouter (Free Auto)"]
+        ["Groq Llama 3.3", "Gemini 3.6 Flash", "DeepSeek V3", "Cerebras Llama 3.1", "OpenRouter (Free Auto)"]
     )
 
 note_style = st.sidebar.selectbox(
@@ -128,11 +128,12 @@ uploaded_files = st.file_uploader(
 def call_ai(provider, prompt):
     try:
         if provider == "Gemini" and gemini_client:
+            # 💡 최신 권장 모델 gemini-3.6-flash 적용
             try:
-                res = gemini_client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+                res = gemini_client.models.generate_content(model='gemini-3.6-flash', contents=prompt)
                 return res.text
             except Exception:
-                res = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
+                res = gemini_client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
                 return res.text
         elif provider == "Groq" and groq_client:
             res = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
@@ -213,11 +214,10 @@ if uploaded_files:
                         except Exception as e:
                             st.warning(f"⚠️ Groq 변환 제한 초과/에러 발생, Gemini 우회 분석으로 전환합니다: {e}")
 
-                    # 2차 시도 (Groq 실패 혹은 용량 초과 시): Gemini 멀티모달 분석 우회
+                    # 2차 시도: Gemini 멀티모달 분석 우회 (`gemini-3.6-flash` 사용)
                     if not transcription_success and gemini_client:
                         status.update(label=f"🔄 '{file_name}' 파일을 Gemini 대용량 멀티모달 분석 방식으로 우회 전사 중...")
                         try:
-                            # 💡 임시 파일로 저장 후 Gemini Files API 업로드 처리 (최신 SDK 호환 방식)
                             temp_gemini_path = f"gemini_temp_{unique_id}.{file_ext}"
                             with open(temp_gemini_path, "wb") as f:
                                 f.write(file_bytes)
@@ -231,13 +231,12 @@ if uploaded_files:
                             if os.path.exists(temp_gemini_path):
                                 os.remove(temp_gemini_path)
 
-                            # 파일 처리 대기
                             while g_file_res.state.name == "PROCESSING":
                                 time.sleep(2)
                                 g_file_res = gemini_client.files.get(name=g_file_res.name)
 
                             g_ans = gemini_client.models.generate_content(
-                                model='gemini-2.0-flash',
+                                model='gemini-3.6-flash',
                                 contents=[g_file_res, "이 음성/영상 파일의 전체 내용을 빠짐없이 한국어 텍스트로 상세히 전사(STT)해줘."]
                             )
                             file_text = g_ans.text
@@ -283,7 +282,7 @@ if uploaded_files:
                 else:
                     engine_map = {
                         "Groq Llama 3.3": "Groq", 
-                        "Gemini 2.0 Flash": "Gemini", 
+                        "Gemini 3.6 Flash": "Gemini", 
                         "DeepSeek V3": "DeepSeek", 
                         "Cerebras Llama 3.1": "Cerebras",
                         "OpenRouter (Free Auto)": "OpenRouter"
