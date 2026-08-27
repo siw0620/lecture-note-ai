@@ -70,11 +70,11 @@ def save_to_browser_storage(data_dict):
 st.sidebar.header("⚙️ AI 엔진 및 요약 설정")
 ai_mode = st.sidebar.radio("분석 모드", ["다중 AI 교차 검증 (권장)", "단일 AI 신속 분석"])
 
-selected_single_ai = "Gemini 1.5 Flash"
+selected_single_ai = "Groq Llama 3.3"
 if ai_mode == "단일 AI 신속 분석":
     selected_single_ai = st.sidebar.selectbox(
         "사용할 AI 모델 선택",
-        ["Gemini 1.5 Flash", "Groq Llama 3.3", "DeepSeek V3", "Cerebras Llama 3.1", "OpenRouter (Free Auto)"]
+        ["Groq Llama 3.3", "Gemini 2.0 Flash", "DeepSeek V3", "Cerebras Llama 3.1", "OpenRouter (Free Auto)"]
     )
 
 note_style = st.sidebar.selectbox(
@@ -127,8 +127,14 @@ uploaded_files = st.file_uploader(
 def call_ai(provider, prompt):
     try:
         if provider == "Gemini" and gemini_client:
-            res = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
-            return res.text
+            # 💡 최신 표준인 gemini-2.0-flash 모델 적용 (404 에러 원천 차단)
+            try:
+                res = gemini_client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+                return res.text
+            except Exception:
+                # 대체 백업 모델 시도
+                res = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
+                return res.text
         elif provider == "Groq" and groq_client:
             res = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
             return res.choices[0].message.content
@@ -191,7 +197,7 @@ if uploaded_files:
                         except Exception as ex:
                             status.update(label=f"⚠️ 압축 실패로 원본 파일로 진행합니다: {ex}")
 
-                    if file_size_mb <= 25 and groq_client:
+                    if groq_client:
                         status.update(label=f"🎙️ '{file_name}' Groq Whisper 초고속 변환 중...")
                         try:
                             transcription = groq_client.audio.transcriptions.create(
@@ -203,47 +209,8 @@ if uploaded_files:
                             file_text = str(transcription).strip()
                         except Exception as e:
                             st.error(f"❌ '{file_name}' Groq 변환 오류: {e}")
-                    elif gemini_client:
-                        status.update(label=f"🎙️ '{file_name}' Gemini 대용량 파일 업로드 및 분석 중...")
-                        try:
-                            temp_file_path = f"temp_{unique_id}.mp3"
-                            with open(temp_file_path, "wb") as f:
-                                f.write(processed_audio_bytes)
-
-                            status.update(label=f"📤 구글 서버로 업로드 중...")
-                            with open(temp_file_path, "rb") as f:
-                                # 💡 핵심 수정: mime_type을 명시적으로 지정하여 Mime type 에러 완벽 해결
-                                gemini_file = gemini_client.files.upload(
-                                    file=f, 
-                                    config={'display_name': 'audio_file', 'mime_type': 'audio/mp3'}
-                                )
-
-                            status.update(label=f"⏳ 서버 처리 대기 중...")
-                            while gemini_file.state.name == "PROCESSING":
-                                time.sleep(2)
-                                gemini_file = gemini_client.files.get(name=gemini_file.name)
-
-                            status.update(label=f"🤖 음성 텍스트 변환(STT) 진행 중...")
-                            res = gemini_client.models.generate_content(
-                                model='gemini-1.5-flash',
-                                contents=[
-                                    gemini_file,
-                                    "이 음성/동영상 파일의 모든 대화 내용을 빠짐없이 한국어로 텍스트로 받아적어줘(STT)."
-                                ]
-                            )
-                            file_text = res.text.strip()
-
-                            if os.path.exists(temp_file_path):
-                                os.remove(temp_file_path)
-                            try:
-                                gemini_client.files.delete(name=gemini_file.name)
-                            except:
-                                pass
-
-                        except Exception as e:
-                            st.error(f"❌ '{file_name}' Gemini 분석 오류: {e}")
                     else:
-                        st.error("❌ API 키 설정을 확인해주세요.")
+                        st.error("❌ Groq API 키가 설정되지 않았습니다.")
 
                 elif file_ext == "pdf":
                     if HAS_PDF:
@@ -271,18 +238,18 @@ if uploaded_files:
         full_combined_text = "\n\n".join(combined_text_list)
 
         if full_combined_text:
-            with st.status("🤖 AI 엔진들이 데이터를 정밀 분석하고 있습니다...", expanded=True) as ai_status:
+            with st.status("🤖 Groq 메인 초안 작성 및 멀티 AI 교차 검증 중...", expanded=True) as ai_status:
                 
-                st.write("📌 [1/3] 핵심 요약 노트 및 교차 검증 중...")
+                st.write("📌 [1/3] Groq 초안 작성 및 타 AI 교차 검증 진행 중...")
                 if ai_mode == "다중 AI 교차 검증 (권장)":
-                    g_res = call_ai("Gemini", f"통합 내용 요약:\n{full_combined_text}")
                     q_res = call_ai("Groq", f"통합 내용 요약:\n{full_combined_text}")
-                    cross_p = f"[Gemini 요약]: {g_res}\n[Llama 요약]: {q_res}\n두 분석을 교차 검증하여 깔끔한 노트로 정리해줘. 스타일: {note_style}"
-                    final_note = call_ai("Gemini", cross_p)
+                    g_res = call_ai("Gemini", f"통합 내용 요약:\n{full_combined_text}")
+                    cross_p = f"[Groq 메인 초안]: {q_res}\n[Gemini 검토 의견]: {g_res}\n위 내용을 바탕으로 Groq의 분석을 중심으로 하되 Gemini의 의견을 반영하여 상호 교차 검증된 가장 완벽한 최종 노트로 정리해줘. 스타일: {note_style}"
+                    final_note = call_ai("Groq", cross_p)
                 else:
                     engine_map = {
-                        "Gemini 1.5 Flash": "Gemini", 
                         "Groq Llama 3.3": "Groq", 
+                        "Gemini 2.0 Flash": "Gemini", 
                         "DeepSeek V3": "DeepSeek", 
                         "Cerebras Llama 3.1": "Cerebras",
                         "OpenRouter (Free Auto)": "OpenRouter"
@@ -290,12 +257,12 @@ if uploaded_files:
                     final_note = call_ai(engine_map[selected_single_ai], f"통합 내용 요약 (스타일: {note_style}):\n{full_combined_text}")
 
                 st.write("💡 [2/3] 핵심 용어 및 플래시카드 생성 중...")
-                dictionary = call_ai("Gemini", f"핵심 용어 5개 및 암기 플래시카드(Q&A 5개) 생성:\n{full_combined_text}")
+                dictionary = call_ai("Groq", f"핵심 용어 5개 및 암기 플래시카드(Q&A 5개) 생성:\n{full_combined_text}")
 
                 st.write("🎯 [3/3] 시험 출제 예상 문제 제작 중...")
                 exam = call_ai("Groq", f"시험/평가 예상 문제 4개(객관식 3, 서술형 1)와 정답/해설 작성:\n{full_combined_text}")
 
-                ai_status.update(label="✨ 모든 분석 및 노트 생성이 완료되었습니다!", state="complete", expanded=False)
+                ai_status.update(label="✨ Groq 중심 분석 및 교차 검증이 완료되었습니다!", state="complete", expanded=False)
 
             st.session_state['note'] = final_note
             st.session_state['dict'] = dictionary
@@ -320,5 +287,5 @@ if 'note' in st.session_state:
         q = st.text_input("통합 파일 내용에 대한 질문을 자유롭게 입력하세요:")
         if q:
             with st.spinner("🤖 AI가 답변을 작성하는 중..."):
-                ans = call_ai("Cerebras" if cerebras_key else "Gemini", f"통합 내용:{st.session_state['stt_text']}\n질문:{q}")
+                ans = call_ai("Groq" if groq_key else "Gemini", f"통합 내용:{st.session_state['stt_text']}\n질문:{q}")
             st.info(ans)
