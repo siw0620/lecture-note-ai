@@ -1,11 +1,18 @@
 import streamlit as st
 import os
 import io
+import time
 
 from google import genai
 from openai import OpenAI
 
-# 문서 파일 파싱용 라이브러리
+# 음성 압축용 pydub 라이브러리 및 문서 라이브러리 확인
+try:
+    from pydub import AudioSegment
+    HAS_PYDUB = True
+except ImportError:
+    HAS_PYDUB = False
+
 try:
     from pypdf import PdfReader
     HAS_PDF = True
@@ -53,7 +60,7 @@ note_style = st.sidebar.selectbox(
 
 # 다중 파일 업로드 허용
 uploaded_files = st.file_uploader(
-    "📂 대용량 음성녹음, 동영상, PDF, Word, 소스코드 등을 한번에 올려주세요 (25MB 초과 파일 자동 대응)", 
+    "📂 대용량 음성녹음, 동영상, PDF, Word, 소스코드 등을 한번에 올려주세요 (대용량 음성 자동 압축 기능 탑재)", 
     type=None, 
     accept_multiple_files=True
 )
@@ -82,8 +89,7 @@ def call_ai(provider, prompt):
 if uploaded_files:
     combined_text_list = []
     
-    # 업로드된 파일 파싱 과정도 로딩 표시 추가
-    with st.status("📁 파일 읽기 및 음성 변환 중...", expanded=True) as status:
+    with st.status("📁 파일 읽기, 용량 최적화 및 음성 분석 중...", expanded=True) as status:
         for file in uploaded_files:
             file_name = file.name
             file_ext = file_name.split(".")[-1].lower()
@@ -94,11 +100,45 @@ if uploaded_files:
             audio_extensions = ["wav", "mp3", "m4a", "ogg", "flac", "aac", "webm", "mp4", "mpeg", "mpga"]
 
             if file_ext in audio_extensions:
+                processed_audio_bytes = file_bytes
+                processed_file_name = file_name
+                
+                # 💡 오디오 압축 로직 (Pydub 활용하여 용량 다이어트)
+                if HAS_PYDUB and file_size_mb > 10:
+                    status.update(label=f"🗜️ '{file_name}' ({file_size_mb:.1f}MB) AI 분석용 초고속 다이어트(압축) 중...")
+                    try:
+                        temp_in_path = f"input_{file_name}"
+                        temp_out_path = f"compressed_{file_name.rsplit('.', 1)[0]}.mp3"
+                        
+                        with open(temp_in_path, "wb") as f:
+                            f.write(file_bytes)
+                        
+                        # 음성 로드 및 모노 변환, 샘플레이트 낮추기 (음질은 유지하되 용량은 대폭 축소)
+                        audio = AudioSegment.from_file(temp_in_path)
+                        audio = audio.set_channels(1) # 모노
+                        audio = audio.set_frame_rate(16000) # 16kHz
+                        audio.export(temp_out_path, format="mp3", bitrate="64k")
+                        
+                        with open(temp_out_path, "rb") as f:
+                            processed_audio_bytes = f.read()
+                        
+                        processed_file_name = f"compressed_{file_name.rsplit('.', 1)[0]}.mp3"
+                        compressed_size_mb = len(processed_audio_bytes) / (1024 * 1024)
+                        status.update(label=f"✨ '{file_name}' 압축 완료! ({file_size_mb:.1f}MB ➔ {compressed_size_mb:.1f}MB)")
+                        
+                        # 임시 파일 정리
+                        if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                        if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                        file_size_mb = compressed_size_mb
+                    except Exception as ex:
+                        status.update(label=f"⚠️ 압축 실패로 원본 파일로 진행합니다: {ex}")
+
+                # 1. Groq 처리 (압축 후 25MB 이하이면 Groq로 초고속 처리)
                 if file_size_mb <= 25 and groq_client:
-                    status.update(label=f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) Groq Whisper 초고속 변환 중...")
+                    status.update(label=f"🎙️ '{processed_file_name}' Groq Whisper 초고속 변환 중...")
                     try:
                         transcription = groq_client.audio.transcriptions.create(
-                            file=(file_name, file_bytes, f"audio/{file_ext}" if file_ext != "mp4" else "video/mp4"),
+                            file=(processed_file_name, processed_audio_bytes, "audio/mp3"),
                             model="whisper-large-v3",
                             language="ko",
                             response_format="text"
@@ -106,18 +146,40 @@ if uploaded_files:
                         file_text = str(transcription).strip()
                     except Exception as e:
                         st.error(f"❌ '{file_name}' Groq 변환 오류: {e}")
+                
+                # 2. Gemini Files API 처리
                 elif gemini_client:
-                    status.update(label=f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) 대용량 파일 Gemini 멀티모달 분석 중...")
+                    status.update(label=f"🎙️ '{processed_file_name}' Gemini 대용량 파일 업로드 및 분석 중...")
                     try:
-                        mime_type = f"audio/{file_ext}" if file_ext != "mp4" else "video/mp4"
+                        temp_file_path = f"temp_{processed_file_name}"
+                        with open(temp_file_path, "wb") as f:
+                            f.write(processed_audio_bytes)
+
+                        status.update(label=f"📤 구글 서버로 업로드 중...")
+                        gemini_file = gemini_client.files.upload(file=temp_file_path)
+
+                        status.update(label=f"⏳ 서버 처리 대기 중...")
+                        while gemini_file.state.name == "PROCESSING":
+                            time.sleep(2)
+                            gemini_file = gemini_client.files.get(name=gemini_file.name)
+
+                        status.update(label=f"🤖 음성 텍스트 변환(STT) 진행 중...")
                         res = gemini_client.models.generate_content(
                             model='gemini-1.5-flash',
                             contents=[
-                                {"mime_type": mime_type, "data": file_bytes},
+                                gemini_file,
                                 "이 음성/동영상 파일의 모든 대화 내용을 빠짐없이 한국어로 텍스트로 받아적어줘(STT)."
                             ]
                         )
                         file_text = res.text.strip()
+
+                        if os.path.exists(temp_file_path):
+                            os.remove(temp_file_path)
+                        try:
+                            gemini_client.files.delete(name=gemini_file.name)
+                        except:
+                            pass
+
                     except Exception as e:
                         st.error(f"❌ '{file_name}' Gemini 분석 오류: {e}")
                 else:
@@ -144,7 +206,7 @@ if uploaded_files:
             if file_text:
                 combined_text_list.append(f"--- [파일명: {file_name}] ---\n{file_text}")
 
-        status.update(label="✅ 모든 파일 처리 완료!", state="complete", expanded=False)
+        status.update(label="✅ 모든 파일 최적화 및 처리 완료!", state="complete", expanded=False)
 
     full_combined_text = "\n\n".join(combined_text_list)
 
@@ -152,11 +214,9 @@ if uploaded_files:
         with st.expander("📄 추출된 전체 파일 통합 텍스트 확인"):
             st.text_area("통합 데이터 내용", full_combined_text, height=200)
 
-        # 🚀 눈에 띄는 명확한 전송 버튼 생성
         st.markdown("---")
         if st.button("🚀 전체 파일 통합 AI 학습 노트 및 문제 생성하기", type="primary", use_container_width=True):
             
-            # 단계별 로딩 상태바 (Progress / Status)
             with st.status("🤖 AI 엔진들이 데이터를 정밀 분석하고 있습니다...", expanded=True) as ai_status:
                 
                 st.write("📌 [1/3] 핵심 요약 노트 및 교차 검증 중...")
@@ -183,12 +243,11 @@ if uploaded_files:
 
                 ai_status.update(label="✨ 모든 분석 및 노트 생성이 완료되었습니다!", state="complete", expanded=False)
 
-            # 세션에 결과 저장
             st.session_state['note'] = final_note
             st.session_state['dict'] = dictionary
             st.session_state['exam'] = exam
             st.session_state['stt_text'] = full_combined_text
-            st.rerun() # 화면 새로고침하여 결과 탭 출력
+            st.rerun()
 
     if 'note' in st.session_state:
         st.markdown("---")
