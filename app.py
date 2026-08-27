@@ -3,6 +3,7 @@ import os
 import io
 import time
 import json
+import uuid
 import streamlit.components.v1 as components
 
 from google import genai
@@ -44,10 +45,17 @@ cerebras_client = OpenAI(base_url="https://api.cerebras.ai/v1", api_key=cerebras
 st.set_page_config(page_title="Ultra AI 수업 & 대용량 파일 만능 분석기", layout="wide")
 st.title("🎓 Ultra Multi-AI 대용량 파일 통합 분석 시스템")
 
-# ☁️ 브라우저 로컬 저장소(구글 드라이브 방식) 연동을 위한 자바스크립트 컴포넌트
+# 🔄 새로고침(리로딩) 버튼 기능 구현
+if st.sidebar.button("🔄 파일 및 화면 리로딩 (초기화)", use_container_width=True):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
+
+st.sidebar.markdown("---")
+
+# ☁️ 브라우저 로컬 저장소 연동 자바스크립트 컴포넌트
 def save_to_browser_storage(data_dict):
     json_str = json.dumps(data_dict, ensure_ascii=False)
-    # 자바스크립트를 통해 브라우저 localStorage에 데이터 영구 저장
     components.html(f"""
         <script>
             try {{
@@ -57,10 +65,6 @@ def save_to_browser_storage(data_dict):
             }}
         </script>
     """, height=0, width=0)
-
-def load_from_browser_storage():
-    # 브라우저 저장소에서 데이터 불러오기 시뮬레이션을 위한 UI 안내
-    pass
 
 # 사이드바 설정
 st.sidebar.header("⚙️ AI 엔진 및 요약 설정")
@@ -78,12 +82,11 @@ note_style = st.sidebar.selectbox(
     ["개조식 핵심 요약 (-함/-습 체)", "스토리텔링 친절한 설명형", "시험 직전 1분 요약형"]
 )
 
-# 📂 사이드바에 구글 드라이브 스타일 연동 메뉴 추가
+# 📂 사이드바에 클라우드 드라이브 연동 메뉴 추가
 st.sidebar.markdown("---")
 st.sidebar.subheader("☁️ 클라우드 드라이브 연동")
-st.sidebar.info("💡 브라우저에 학습 기록이 자동 저장되며, 언제든 구글 드라이브용 파일로 백업/복원할 수 있습니다.")
+st.sidebar.info("💡 브라우저에 학습 기록이 자동 저장되며, 언제든 백업/복원할 수 있습니다.")
 
-# 데이터가 생성되면 자동으로 브라우저 저장소에 싱크 맞춤
 if 'note' in st.session_state:
     current_data = {
         "note": st.session_state.get('note', ''),
@@ -93,7 +96,6 @@ if 'note' in st.session_state:
     }
     save_to_browser_storage(current_data)
     
-    # 구글 드라이브 백업 다운로드 버튼
     json_str = json.dumps(current_data, ensure_ascii=False, indent=4)
     st.sidebar.download_button(
         label="📥 구글 드라이브 백업 파일 다운로드",
@@ -103,7 +105,6 @@ if 'note' in st.session_state:
         use_container_width=True
     )
 
-# 구글 드라이브 백업 파일 업로드하여 복원
 uploaded_backup = st.sidebar.file_uploader("📤 드라이브 백업 파일 불러오기", type=["json"])
 if uploaded_backup is not None:
     try:
@@ -144,131 +145,129 @@ def call_ai(provider, prompt):
         return f"[{provider} 통신 오류]: {str(e)}"
     return f"[{provider}] API 키가 설정되지 않았습니다."
 
+# 🚀 파일이 업로드된 상태에서 전송 버튼을 눌렀을 때만 분석 시작
 if uploaded_files:
-    combined_text_list = []
-    
-    with st.status("📁 파일 읽기, 용량 최적화 및 음성 분석 중...", expanded=True) as status:
-        for file in uploaded_files:
-            file_name = file.name
-            file_ext = file_name.split(".")[-1].lower()
-            file_bytes = file.getvalue()
-            file_text = ""
-            file_size_mb = len(file_bytes) / (1024 * 1024)
+    st.markdown("---")
+    # 전송 버튼 배치
+    if st.button("🚀 업로드한 파일 분석 전송하기", type="primary", use_container_width=True):
+        combined_text_list = []
+        
+        with st.status("📁 파일 읽기, 용량 최적화 및 음성 분석 중...", expanded=True) as status:
+            for file in uploaded_files:
+                file_name = file.name
+                file_ext = file_name.split(".")[-1].lower()
+                file_bytes = file.getvalue()
+                file_text = ""
+                file_size_mb = len(file_bytes) / (1024 * 1024)
 
-            audio_extensions = ["wav", "mp3", "m4a", "ogg", "flac", "aac", "webm", "mp4", "mpeg", "mpga"]
+                audio_extensions = ["wav", "mp3", "m4a", "ogg", "flac", "aac", "webm", "mp4", "mpeg", "mpga"]
 
-            if file_ext in audio_extensions:
-                processed_audio_bytes = file_bytes
-                processed_file_name = file_name
-                
-                if HAS_PYDUB and file_size_mb > 10:
-                    status.update(label=f"🗜️ '{file_name}' ({file_size_mb:.1f}MB) AI 분석용 초고속 다이어트(압축) 중...")
-                    try:
-                        temp_in_path = f"input_{file_name}"
-                        temp_out_path = f"compressed_{file_name.rsplit('.', 1)[0]}.mp3"
-                        
-                        with open(temp_in_path, "wb") as f:
-                            f.write(file_bytes)
-                        
-                        audio = AudioSegment.from_file(temp_in_path)
-                        audio = audio.set_channels(1)
-                        audio = audio.set_frame_rate(16000)
-                        audio.export(temp_out_path, format="mp3", bitrate="64k")
-                        
-                        with open(temp_out_path, "rb") as f:
-                            processed_audio_bytes = f.read()
-                        
-                        processed_file_name = f"compressed_{file_name.rsplit('.', 1)[0]}.mp3"
-                        compressed_size_mb = len(processed_audio_bytes) / (1024 * 1024)
-                        status.update(label=f"✨ '{file_name}' 압축 완료! ({file_size_mb:.1f}MB ➔ {compressed_size_mb:.1f}MB)")
-                        
-                        if os.path.exists(temp_in_path): os.remove(temp_in_path)
-                        if os.path.exists(temp_out_path): os.remove(temp_out_path)
-                        file_size_mb = compressed_size_mb
-                    except Exception as ex:
-                        status.update(label=f"⚠️ 압축 실패로 원본 파일로 진행합니다: {ex}")
-
-                if file_size_mb <= 25 and groq_client:
-                    status.update(label=f"🎙️ '{processed_file_name}' Groq Whisper 초고속 변환 중...")
-                    try:
-                        transcription = groq_client.audio.transcriptions.create(
-                            file=(processed_file_name, processed_audio_bytes, "audio/mp3"),
-                            model="whisper-large-v3",
-                            language="ko",
-                            response_format="text"
-                        )
-                        file_text = str(transcription).strip()
-                    except Exception as e:
-                        st.error(f"❌ '{file_name}' Groq 변환 오류: {e}")
-                elif gemini_client:
-                    status.update(label=f"🎙️ '{processed_file_name}' Gemini 대용량 파일 업로드 및 분석 중...")
-                    try:
-                        temp_file_path = f"temp_{processed_file_name}"
-                        with open(temp_file_path, "wb") as f:
-                            f.write(processed_audio_bytes)
-
-                        status.update(label=f"📤 구글 서버로 업로드 중...")
-                        gemini_file = gemini_client.files.upload(file=temp_file_path)
-
-                        status.update(label=f"⏳ 서버 처리 대기 중...")
-                        while gemini_file.state.name == "PROCESSING":
-                            time.sleep(2)
-                            gemini_file = gemini_client.files.get(name=gemini_file.name)
-
-                        status.update(label=f"🤖 음성 텍스트 변환(STT) 진행 중...")
-                        res = gemini_client.models.generate_content(
-                            model='gemini-1.5-flash',
-                            contents=[
-                                gemini_file,
-                                "이 음성/동영상 파일의 모든 대화 내용을 빠짐없이 한국어로 텍스트로 받아적어줘(STT)."
-                            ]
-                        )
-                        file_text = res.text.strip()
-
-                        if os.path.exists(temp_file_path):
-                            os.remove(temp_file_path)
+                if file_ext in audio_extensions:
+                    processed_audio_bytes = file_bytes
+                    unique_id = uuid.uuid4().hex[:8]
+                    
+                    if HAS_PYDUB and file_size_mb > 10:
+                        status.update(label=f"🗜️ '{file_name}' ({file_size_mb:.1f}MB) AI 분석용 초고속 다이어트(압축) 중...")
                         try:
-                            gemini_client.files.delete(name=gemini_file.name)
-                        except:
-                            pass
+                            temp_in_path = f"input_{unique_id}.{file_ext}"
+                            temp_out_path = f"compressed_{unique_id}.mp3"
+                            
+                            with open(temp_in_path, "wb") as f:
+                                f.write(file_bytes)
+                            
+                            audio = AudioSegment.from_file(temp_in_path)
+                            audio = audio.set_channels(1)
+                            audio = audio.set_frame_rate(16000)
+                            audio.export(temp_out_path, format="mp3", bitrate="64k")
+                            
+                            with open(temp_out_path, "rb") as f:
+                                processed_audio_bytes = f.read()
+                            
+                            compressed_size_mb = len(processed_audio_bytes) / (1024 * 1024)
+                            status.update(label=f"✨ '{file_name}' 압축 완료! ({file_size_mb:.1f}MB ➔ {compressed_size_mb:.1f}MB)")
+                            
+                            if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                            if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                            file_size_mb = compressed_size_mb
+                        except Exception as ex:
+                            status.update(label=f"⚠️ 압축 실패로 원본 파일로 진행합니다: {ex}")
 
-                    except Exception as e:
-                        st.error(f"❌ '{file_name}' Gemini 분석 오류: {e}")
+                    if file_size_mb <= 25 and groq_client:
+                        status.update(label=f"🎙️ '{file_name}' Groq Whisper 초고속 변환 중...")
+                        try:
+                            transcription = groq_client.audio.transcriptions.create(
+                                file=("audio_file.mp3", processed_audio_bytes, "audio/mp3"),
+                                model="whisper-large-v3",
+                                language="ko",
+                                response_format="text"
+                            )
+                            file_text = str(transcription).strip()
+                        except Exception as e:
+                            st.error(f"❌ '{file_name}' Groq 변환 오류: {e}")
+                    elif gemini_client:
+                        status.update(label=f"🎙️ '{file_name}' Gemini 대용량 파일 업로드 및 분석 중...")
+                        try:
+                            temp_file_path = f"temp_{unique_id}.mp3"
+                            with open(temp_file_path, "wb") as f:
+                                f.write(processed_audio_bytes)
+
+                            status.update(label=f"📤 구글 서버로 업로드 중...")
+                            with open(temp_file_path, "rb") as f:
+                                gemini_file = gemini_client.files.upload(file=f, config={'display_name': 'audio_file'})
+
+                            status.update(label=f"⏳ 서버 처리 대기 중...")
+                            while gemini_file.state.name == "PROCESSING":
+                                time.sleep(2)
+                                gemini_file = gemini_client.files.get(name=gemini_file.name)
+
+                            status.update(label=f"🤖 음성 텍스트 변환(STT) 진행 중...")
+                            res = gemini_client.models.generate_content(
+                                model='gemini-1.5-flash',
+                                contents=[
+                                    gemini_file,
+                                    "이 음성/동영상 파일의 모든 대화 내용을 빠짐없이 한국어로 텍스트로 받아적어줘(STT)."
+                                ]
+                            )
+                            file_text = res.text.strip()
+
+                            if os.path.exists(temp_file_path):
+                                os.remove(temp_file_path)
+                            try:
+                                gemini_client.files.delete(name=gemini_file.name)
+                            except:
+                                pass
+
+                        except Exception as e:
+                            st.error(f"❌ '{file_name}' Gemini 분석 오류: {e}")
+                    else:
+                        st.error("❌ API 키 설정을 확인해주세요.")
+
+                elif file_ext == "pdf":
+                    if HAS_PDF:
+                        reader = PdfReader(io.BytesIO(file_bytes))
+                        extracted = [page.extract_text() for page in reader.pages if page.extract_text()]
+                        file_text = "\n".join(extracted)
+                elif file_ext in ["docx", "doc"]:
+                    if HAS_DOCX:
+                        doc = docx.Document(io.BytesIO(file_bytes))
+                        extracted = [p.text for p in doc.paragraphs if p.text]
+                        file_text = "\n".join(extracted)
                 else:
-                    st.error("❌ API 키 설정을 확인해주세요.")
+                    for encoding in ["utf-8", "cp949", "euc-kr", "latin-1"]:
+                        try:
+                            file_text = file_bytes.decode(encoding)
+                            break
+                        except UnicodeDecodeError:
+                            continue
 
-            elif file_ext == "pdf":
-                if HAS_PDF:
-                    reader = PdfReader(io.BytesIO(file_bytes))
-                    extracted = [page.extract_text() for page in reader.pages if page.extract_text()]
-                    file_text = "\n".join(extracted)
-            elif file_ext in ["docx", "doc"]:
-                if HAS_DOCX:
-                    doc = docx.Document(io.BytesIO(file_bytes))
-                    extracted = [p.text for p in doc.paragraphs if p.text]
-                    file_text = "\n".join(extracted)
-            else:
-                for encoding in ["utf-8", "cp949", "euc-kr", "latin-1"]:
-                    try:
-                        file_text = file_bytes.decode(encoding)
-                        break
-                    except UnicodeDecodeError:
-                        continue
+                if file_text:
+                    combined_text_list.append(f"--- [파일명: {file_name}] ---\n{file_text}")
 
-            if file_text:
-                combined_text_list.append(f"--- [파일명: {file_name}] ---\n{file_text}")
+            status.update(label="✅ 모든 파일 최적화 및 처리 완료!", state="complete", expanded=False)
 
-        status.update(label="✅ 모든 파일 최적화 및 처리 완료!", state="complete", expanded=False)
+        full_combined_text = "\n\n".join(combined_text_list)
 
-    full_combined_text = "\n\n".join(combined_text_list)
-
-    if full_combined_text:
-        with st.expander("📄 추출된 전체 파일 통합 텍스트 확인"):
-            st.text_area("통합 데이터 내용", full_combined_text, height=200)
-
-        st.markdown("---")
-        if st.button("🚀 전체 파일 통합 AI 학습 노트 및 문제 생성하기", type="primary", use_container_width=True):
-            
+        if full_combined_text:
             with st.status("🤖 AI 엔진들이 데이터를 정밀 분석하고 있습니다...", expanded=True) as ai_status:
                 
                 st.write("📌 [1/3] 핵심 요약 노트 및 교차 검증 중...")
@@ -301,22 +300,22 @@ if uploaded_files:
             st.session_state['stt_text'] = full_combined_text
             st.rerun()
 
-    if 'note' in st.session_state:
-        st.markdown("---")
-        t1, t2, t3, t4 = st.tabs(["📝 통합 요약 노트", "💡 용어 & 플래시카드", "🎯 예상 문제", "💬 AI Q&A 챗봇"])
-        with t1:
-            st.subheader("📌 교차 검증 통합 노트")
-            st.markdown(st.session_state['note'])
-        with t2:
-            st.subheader("💡 주요 용어 및 암기 카드")
-            st.markdown(st.session_state['dict'])
-        with t3:
-            st.subheader("🎯 출제 예상 문제")
-            st.markdown(st.session_state['exam'])
-        with t4:
-            st.subheader("💬 AI 심화 Q&A 질문하기")
-            q = st.text_input("통합 파일 내용에 대한 질문을 자유롭게 입력하세요:")
-            if q:
-                with st.spinner("🤖 AI가 답변을 작성하는 중..."):
-                    ans = call_ai("Cerebras" if cerebras_key else "Gemini", f"통합 내용:{st.session_state['stt_text']}\n질문:{q}")
-                st.info(ans)
+if 'note' in st.session_state:
+    st.markdown("---")
+    t1, t2, t3, t4 = st.tabs(["📝 통합 요약 노트", "💡 용어 & 플래시카드", "🎯 예상 문제", "💬 AI Q&A 챗봇"])
+    with t1:
+        st.subheader("📌 교차 검증 통합 노트")
+        st.markdown(st.session_state['note'])
+    with t2:
+        st.subheader("💡 주요 용어 및 암기 카드")
+        st.markdown(st.session_state['dict'])
+    with t3:
+        st.subheader("🎯 출제 예상 문제")
+        st.markdown(st.session_state['exam'])
+    with t4:
+        st.subheader("💬 AI 심화 Q&A 질문하기")
+        q = st.text_input("통합 파일 내용에 대한 질문을 자유롭게 입력하세요:")
+        if q:
+            with st.spinner("🤖 AI가 답변을 작성하는 중..."):
+                ans = call_ai("Cerebras" if cerebras_key else "Gemini", f"통합 내용:{st.session_state['stt_text']}\n질문:{q}")
+            st.info(ans)
