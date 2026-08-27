@@ -2,6 +2,8 @@ import streamlit as st
 import os
 import io
 import time
+import json
+import streamlit.components.v1 as components
 
 from google import genai
 from openai import OpenAI
@@ -42,6 +44,24 @@ cerebras_client = OpenAI(base_url="https://api.cerebras.ai/v1", api_key=cerebras
 st.set_page_config(page_title="Ultra AI 수업 & 대용량 파일 만능 분석기", layout="wide")
 st.title("🎓 Ultra Multi-AI 대용량 파일 통합 분석 시스템")
 
+# ☁️ 브라우저 로컬 저장소(구글 드라이브 방식) 연동을 위한 자바스크립트 컴포넌트
+def save_to_browser_storage(data_dict):
+    json_str = json.dumps(data_dict, ensure_ascii=False)
+    # 자바스크립트를 통해 브라우저 localStorage에 데이터 영구 저장
+    components.html(f"""
+        <script>
+            try {{
+                localStorage.setItem('ultra_ai_drive_backup', {json.dumps(json_str)});
+            }} catch (e) {{
+                console.error("Storage save failed", e);
+            }}
+        </script>
+    """, height=0, width=0)
+
+def load_from_browser_storage():
+    # 브라우저 저장소에서 데이터 불러오기 시뮬레이션을 위한 UI 안내
+    pass
+
 # 사이드바 설정
 st.sidebar.header("⚙️ AI 엔진 및 요약 설정")
 ai_mode = st.sidebar.radio("분석 모드", ["다중 AI 교차 검증 (권장)", "단일 AI 신속 분석"])
@@ -58,9 +78,47 @@ note_style = st.sidebar.selectbox(
     ["개조식 핵심 요약 (-함/-습 체)", "스토리텔링 친절한 설명형", "시험 직전 1분 요약형"]
 )
 
+# 📂 사이드바에 구글 드라이브 스타일 연동 메뉴 추가
+st.sidebar.markdown("---")
+st.sidebar.subheader("☁️ 클라우드 드라이브 연동")
+st.sidebar.info("💡 브라우저에 학습 기록이 자동 저장되며, 언제든 구글 드라이브용 파일로 백업/복원할 수 있습니다.")
+
+# 데이터가 생성되면 자동으로 브라우저 저장소에 싱크 맞춤
+if 'note' in st.session_state:
+    current_data = {
+        "note": st.session_state.get('note', ''),
+        "dict": st.session_state.get('dict', ''),
+        "exam": st.session_state.get('exam', ''),
+        "stt_text": st.session_state.get('stt_text', '')
+    }
+    save_to_browser_storage(current_data)
+    
+    # 구글 드라이브 백업 다운로드 버튼
+    json_str = json.dumps(current_data, ensure_ascii=False, indent=4)
+    st.sidebar.download_button(
+        label="📥 구글 드라이브 백업 파일 다운로드",
+        data=json_str,
+        file_name="google_drive_study_backup.json",
+        mime="application/json",
+        use_container_width=True
+    )
+
+# 구글 드라이브 백업 파일 업로드하여 복원
+uploaded_backup = st.sidebar.file_uploader("📤 드라이브 백업 파일 불러오기", type=["json"])
+if uploaded_backup is not None:
+    try:
+        loaded_data = json.load(uploaded_backup)
+        st.session_state['note'] = loaded_data.get('note', '')
+        st.session_state['dict'] = loaded_data.get('dict', '')
+        st.session_state['exam'] = loaded_data.get('exam', '')
+        st.session_state['stt_text'] = loaded_data.get('stt_text', '')
+        st.sidebar.success("✅ 클라우드 기록을 성공적으로 동기화했습니다!")
+    except Exception as e:
+        st.sidebar.error(f"❌ 파일 형식이 올바르지 않습니다: {e}")
+
 # 다중 파일 업로드 허용
 uploaded_files = st.file_uploader(
-    "📂 대용량 음성녹음, 동영상, PDF, Word, 소스코드 등을 한번에 올려주세요 (대용량 음성 자동 압축 기능 탑재)", 
+    "📂 대용량 음성녹음, 동영상, PDF, Word, 소스코드 등을 한번에 올려주세요 (대용량 음성 자동 압축 탑재)", 
     type=None, 
     accept_multiple_files=True
 )
@@ -103,7 +161,6 @@ if uploaded_files:
                 processed_audio_bytes = file_bytes
                 processed_file_name = file_name
                 
-                # 💡 오디오 압축 로직 (Pydub 활용하여 용량 다이어트)
                 if HAS_PYDUB and file_size_mb > 10:
                     status.update(label=f"🗜️ '{file_name}' ({file_size_mb:.1f}MB) AI 분석용 초고속 다이어트(압축) 중...")
                     try:
@@ -113,10 +170,9 @@ if uploaded_files:
                         with open(temp_in_path, "wb") as f:
                             f.write(file_bytes)
                         
-                        # 음성 로드 및 모노 변환, 샘플레이트 낮추기 (음질은 유지하되 용량은 대폭 축소)
                         audio = AudioSegment.from_file(temp_in_path)
-                        audio = audio.set_channels(1) # 모노
-                        audio = audio.set_frame_rate(16000) # 16kHz
+                        audio = audio.set_channels(1)
+                        audio = audio.set_frame_rate(16000)
                         audio.export(temp_out_path, format="mp3", bitrate="64k")
                         
                         with open(temp_out_path, "rb") as f:
@@ -126,14 +182,12 @@ if uploaded_files:
                         compressed_size_mb = len(processed_audio_bytes) / (1024 * 1024)
                         status.update(label=f"✨ '{file_name}' 압축 완료! ({file_size_mb:.1f}MB ➔ {compressed_size_mb:.1f}MB)")
                         
-                        # 임시 파일 정리
                         if os.path.exists(temp_in_path): os.remove(temp_in_path)
                         if os.path.exists(temp_out_path): os.remove(temp_out_path)
                         file_size_mb = compressed_size_mb
                     except Exception as ex:
                         status.update(label=f"⚠️ 압축 실패로 원본 파일로 진행합니다: {ex}")
 
-                # 1. Groq 처리 (압축 후 25MB 이하이면 Groq로 초고속 처리)
                 if file_size_mb <= 25 and groq_client:
                     status.update(label=f"🎙️ '{processed_file_name}' Groq Whisper 초고속 변환 중...")
                     try:
@@ -146,8 +200,6 @@ if uploaded_files:
                         file_text = str(transcription).strip()
                     except Exception as e:
                         st.error(f"❌ '{file_name}' Groq 변환 오류: {e}")
-                
-                # 2. Gemini Files API 처리
                 elif gemini_client:
                     status.update(label=f"🎙️ '{processed_file_name}' Gemini 대용량 파일 업로드 및 분석 중...")
                     try:
