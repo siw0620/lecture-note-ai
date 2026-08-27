@@ -7,6 +7,7 @@ import uuid
 import streamlit.components.v1 as components
 
 from google import genai
+from google.genai import types # 💡 Gemini 설정 객체 임포트 추가
 from openai import OpenAI
 
 # 음성 압축용 pydub 라이브러리 및 문서 라이브러리 확인
@@ -169,7 +170,6 @@ if uploaded_files:
                     processed_audio_bytes = file_bytes
                     unique_id = uuid.uuid4().hex[:8]
                     
-                    # 💡 강제 압축 시도 (pydub이 가능할 경우)
                     if HAS_PYDUB:
                         status.update(label=f"🗜️ '{file_name}' ({file_size_mb:.1f}MB) 고효율 오디오 압축 중...")
                         try:
@@ -180,9 +180,8 @@ if uploaded_files:
                                 f.write(file_bytes)
                             
                             audio = AudioSegment.from_file(temp_in_path)
-                            audio = audio.set_channels(1) # 모노 변환으로 용량 반토막
+                            audio = audio.set_channels(1)
                             audio = audio.set_frame_rate(16000)
-                            # 24kbps 초저용량 비트레이트로 압축하여 25MB 제한 완벽 회피
                             audio.export(temp_out_path, format="mp3", bitrate="24k")
                             
                             with open(temp_out_path, "rb") as f:
@@ -195,17 +194,14 @@ if uploaded_files:
                             if os.path.exists(temp_out_path): os.remove(temp_out_path)
                             file_size_mb = compressed_size_mb
                         except Exception as ex:
-                            status.update(label=f"⚠️ pydub 압축 불가 환경 (원본 진행): {ex}")
+                            status.update(label=f"⚠️ pydub 압축 스킵: {ex}")
 
-                    # 💡 만약 압축 후에도 24MB를 넘는다면 Groq 제한에 걸리므로 안전하게 분할 전송 안내 또는 분할 처리
-                    if len(processed_audio_bytes) > 24 * 1024 * 1024:
-                        st.warning(f"⚠️ '{file_name}' 파일 용량이 여전히 24MB를 초과하여 Groq 413 에러 방지를 위해 자동 분할 변환을 시도합니다.")
-                        # 대안으로 앞부분 일부만 혹은 청크 단위로 나누어 전송 시도 가능하나 우선 예외처리 방어
+                    transcription_success = False
                     
-                    if groq_client:
-                        status.update(label=f"🎙️ '{file_name}' Groq Whisper 초고속 변환 중...")
+                    # 1차 시도: Groq Whisper 이용
+                    if groq_client and len(processed_audio_bytes) <= 24 * 1024 * 1024:
+                        status.update(label=f"🎙️ '{file_name}' Groq Whisper 변환 중...")
                         try:
-                            # 💡 파일 이름과 바이트 데이터를 튜플 형태로 안전하게 전달
                             transcription = groq_client.audio.transcriptions.create(
                                 file=(f"audio_{unique_id}.mp3", processed_audio_bytes, "audio/mp3"),
                                 model="whisper-large-v3",
@@ -213,23 +209,42 @@ if uploaded_files:
                                 response_format="text"
                             )
                             file_text = str(transcription).strip()
+                            transcription_success = True
                         except Exception as e:
-                            st.error(f"❌ '{file_name}' Groq 변환 오류 (413 혹은 제한 초과): {e}")
-                            # 💡 Groq 변환 실패 시 Gemini 백업을 통해 음성 분석 우회 시도
-                            if gemini_client:
-                                st.info(f"🔄 '{file_name}' 파일을 안전한 Gemini 멀티모달 분석 방식으로 우회 전환합니다...")
-                                try:
-                                    g_file_res = gemini_client.files.upload(file=io.BytesIO(file_bytes), mime_type=f"audio/{file_ext}")
-                                    g_ans = gemini_client.models.generate_content(
-                                        model='gemini-2.0-flash',
-                                        contents=[g_file_res, "이 음성 파일의 전체 내용을 빠짐없이 텍스트로 상세히 전사(STT)해줘."]
-                                    )
-                                    file_text = g_ans.text
-                                    st.success(f"✅ '{file_name}' Gemini 우회 전사 완료!")
-                                except Exception as ge:
-                                    st.error(f"❌ Gemini 우회 분석 실패: {ge}")
-                    else:
-                        st.error("❌ Groq API 키가 설정되지 않았습니다.")
+                            st.warning(f"⚠️ Groq 변환 제한 초과/에러 발생, Gemini 우회 분석으로 전환합니다: {e}")
+
+                    # 2차 시도 (Groq 실패 혹은 용량 초과 시): Gemini 멀티모달 분석 우회
+                    if not transcription_success and gemini_client:
+                        status.update(label=f"🔄 '{file_name}' 파일을 Gemini 대용량 멀티모달 분석 방식으로 우회 전사 중...")
+                        try:
+                            # 💡 임시 파일로 저장 후 Gemini Files API 업로드 처리 (최신 SDK 호환 방식)
+                            temp_gemini_path = f"gemini_temp_{unique_id}.{file_ext}"
+                            with open(temp_gemini_path, "wb") as f:
+                                f.write(file_bytes)
+                            
+                            with open(temp_gemini_path, "rb") as f:
+                                g_file_res = gemini_client.files.upload(
+                                    file=f,
+                                    config=types.UploadFileConfig(mime_type=f"audio/{file_ext}")
+                                )
+                            
+                            if os.path.exists(temp_gemini_path):
+                                os.remove(temp_gemini_path)
+
+                            # 파일 처리 대기
+                            while g_file_res.state.name == "PROCESSING":
+                                time.sleep(2)
+                                g_file_res = gemini_client.files.get(name=g_file_res.name)
+
+                            g_ans = gemini_client.models.generate_content(
+                                model='gemini-2.0-flash',
+                                contents=[g_file_res, "이 음성/영상 파일의 전체 내용을 빠짐없이 한국어 텍스트로 상세히 전사(STT)해줘."]
+                            )
+                            file_text = g_ans.text
+                            transcription_success = True
+                            st.success(f"✅ '{file_name}' Gemini 우회 전사 완료!")
+                        except Exception as ge:
+                            st.error(f"❌ Gemini 우회 전사 실패: {ge}")
 
                 elif file_ext == "pdf":
                     if HAS_PDF:
