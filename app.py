@@ -43,53 +43,36 @@ openrouter_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=open
 deepseek_client = OpenAI(base_url="https://api.deepseek.com", api_key=deepseek_key) if deepseek_key else None
 cerebras_client = OpenAI(base_url="https://api.cerebras.ai/v1", api_key=cerebras_key) if cerebras_key else None
 
-st.set_page_config(page_title="NINJAGO - Wald des Wissens", layout="wide")
+st.set_page_config(page_title="Wald des Wissens", layout="wide")
 
-# 🥷 닌자고 스타일 커스텀 CSS (날카로운 타이포 및 노란색 마스크 테마)
+# 🥷 닌자고 로고의 날카로운 글꼴 스타일 적용 CSS
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Teko:wght@600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&display=swap');
     
-    .ninjago-header {
-        background: linear-gradient(135deg, #FFD700 0%, #FFC000 100%);
-        padding: 20px 30px;
-        border-radius: 6px;
-        border: 3px solid #111;
-        box-shadow: 4px 4px 0px #111;
-        margin-bottom: 25px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
+    .ninjago-font-title {
+        font-family: 'Cinzel Decorative', serif;
+        font-size: 44px;
+        font-weight: 900;
+        color: #ffffff;
+        letter-spacing: 3px;
+        text-shadow: 2px 2px 0px #ffcc00, 4px 4px 0px #000000;
+        margin-bottom: 0px;
     }
     
-    .ninjago-title {
-        font-family: 'Teko', sans-serif;
-        font-size: 48px;
-        font-weight: 700;
-        color: #111;
+    .ninjago-font-sub {
+        font-family: monospace;
+        font-size: 13px;
+        color: #aaaaaa;
         letter-spacing: 2px;
-        line-height: 1;
-        text-transform: uppercase;
-        margin: 0;
-    }
-    
-    .ninjago-subtitle {
-        font-family: sans-serif;
-        font-size: 14px;
-        font-weight: 800;
-        color: #222;
-        letter-spacing: 1px;
         margin-top: 5px;
         text-transform: uppercase;
     }
     </style>
     
-    <div class="ninjago-header">
-        <div>
-            <div class="ninjago-title">NINJAGO : Wald des Wissens</div>
-            <div class="ninjago-subtitle">⚡ Multi-AI Cross-Verification & Analysis System</div>
-        </div>
-        <div style="font-size: 36px;">🥷</div>
+    <div style="padding: 10px 0 20px 0;">
+        <div class="ninjago-font-title">WALD DES WISSENS</div>
+        <div class="ninjago-font-sub">⚡ Multi-AI Cross-Verification & Analysis System</div>
     </div>
 """, unsafe_allow_html=True)
 
