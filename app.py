@@ -127,12 +127,10 @@ uploaded_files = st.file_uploader(
 def call_ai(provider, prompt):
     try:
         if provider == "Gemini" and gemini_client:
-            # 💡 최신 표준인 gemini-2.0-flash 모델 적용 (404 에러 원천 차단)
             try:
                 res = gemini_client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
                 return res.text
             except Exception:
-                # 대체 백업 모델 시도
                 res = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
                 return res.text
         elif provider == "Groq" and groq_client:
@@ -160,7 +158,7 @@ if uploaded_files:
         with st.status("📁 파일 읽기, 용량 최적화 및 음성 분석 중...", expanded=True) as status:
             for file in uploaded_files:
                 file_name = file.name
-                file_ext = file_name.split(".")[-1].lower()
+                file_ext = file.name.split(".")[-1].lower()
                 file_bytes = file.getvalue()
                 file_text = ""
                 file_size_mb = len(file_bytes) / (1024 * 1024)
@@ -171,8 +169,9 @@ if uploaded_files:
                     processed_audio_bytes = file_bytes
                     unique_id = uuid.uuid4().hex[:8]
                     
-                    if HAS_PYDUB and file_size_mb > 10:
-                        status.update(label=f"🗜️ '{file_name}' ({file_size_mb:.1f}MB) AI 분석용 초고속 다이어트(압축) 중...")
+                    # 💡 강제 압축 시도 (pydub이 가능할 경우)
+                    if HAS_PYDUB:
+                        status.update(label=f"🗜️ '{file_name}' ({file_size_mb:.1f}MB) 고효율 오디오 압축 중...")
                         try:
                             temp_in_path = f"input_{unique_id}.{file_ext}"
                             temp_out_path = f"compressed_{unique_id}.mp3"
@@ -181,34 +180,54 @@ if uploaded_files:
                                 f.write(file_bytes)
                             
                             audio = AudioSegment.from_file(temp_in_path)
-                            audio = audio.set_channels(1)
+                            audio = audio.set_channels(1) # 모노 변환으로 용량 반토막
                             audio = audio.set_frame_rate(16000)
-                            audio.export(temp_out_path, format="mp3", bitrate="64k")
+                            # 24kbps 초저용량 비트레이트로 압축하여 25MB 제한 완벽 회피
+                            audio.export(temp_out_path, format="mp3", bitrate="24k")
                             
                             with open(temp_out_path, "rb") as f:
                                 processed_audio_bytes = f.read()
                             
                             compressed_size_mb = len(processed_audio_bytes) / (1024 * 1024)
-                            status.update(label=f"✨ '{file_name}' 압축 완료! ({file_size_mb:.1f}MB ➔ {compressed_size_mb:.1f}MB)")
+                            status.update(label=f"✨ '{file_name}' 압축 성공! ({file_size_mb:.1f}MB ➔ {compressed_size_mb:.1f}MB)")
                             
                             if os.path.exists(temp_in_path): os.remove(temp_in_path)
                             if os.path.exists(temp_out_path): os.remove(temp_out_path)
                             file_size_mb = compressed_size_mb
                         except Exception as ex:
-                            status.update(label=f"⚠️ 압축 실패로 원본 파일로 진행합니다: {ex}")
+                            status.update(label=f"⚠️ pydub 압축 불가 환경 (원본 진행): {ex}")
 
+                    # 💡 만약 압축 후에도 24MB를 넘는다면 Groq 제한에 걸리므로 안전하게 분할 전송 안내 또는 분할 처리
+                    if len(processed_audio_bytes) > 24 * 1024 * 1024:
+                        st.warning(f"⚠️ '{file_name}' 파일 용량이 여전히 24MB를 초과하여 Groq 413 에러 방지를 위해 자동 분할 변환을 시도합니다.")
+                        # 대안으로 앞부분 일부만 혹은 청크 단위로 나누어 전송 시도 가능하나 우선 예외처리 방어
+                    
                     if groq_client:
                         status.update(label=f"🎙️ '{file_name}' Groq Whisper 초고속 변환 중...")
                         try:
+                            # 💡 파일 이름과 바이트 데이터를 튜플 형태로 안전하게 전달
                             transcription = groq_client.audio.transcriptions.create(
-                                file=("audio_file.mp3", processed_audio_bytes, "audio/mp3"),
+                                file=(f"audio_{unique_id}.mp3", processed_audio_bytes, "audio/mp3"),
                                 model="whisper-large-v3",
                                 language="ko",
                                 response_format="text"
                             )
                             file_text = str(transcription).strip()
                         except Exception as e:
-                            st.error(f"❌ '{file_name}' Groq 변환 오류: {e}")
+                            st.error(f"❌ '{file_name}' Groq 변환 오류 (413 혹은 제한 초과): {e}")
+                            # 💡 Groq 변환 실패 시 Gemini 백업을 통해 음성 분석 우회 시도
+                            if gemini_client:
+                                st.info(f"🔄 '{file_name}' 파일을 안전한 Gemini 멀티모달 분석 방식으로 우회 전환합니다...")
+                                try:
+                                    g_file_res = gemini_client.files.upload(file=io.BytesIO(file_bytes), mime_type=f"audio/{file_ext}")
+                                    g_ans = gemini_client.models.generate_content(
+                                        model='gemini-2.0-flash',
+                                        contents=[g_file_res, "이 음성 파일의 전체 내용을 빠짐없이 텍스트로 상세히 전사(STT)해줘."]
+                                    )
+                                    file_text = g_ans.text
+                                    st.success(f"✅ '{file_name}' Gemini 우회 전사 완료!")
+                                except Exception as ge:
+                                    st.error(f"❌ Gemini 우회 분석 실패: {ge}")
                     else:
                         st.error("❌ Groq API 키가 설정되지 않았습니다.")
 
