@@ -1,10 +1,9 @@
 import streamlit as st
-import asyncio
 import os
 import io
 
 from google import genai
-from openai import AsyncOpenAI
+from openai import OpenAI
 
 # 문서 파일 파싱용 라이브러리
 try:
@@ -28,10 +27,10 @@ cerebras_key = os.getenv("CEREBRAS_API_KEY")
 
 # 클라이언트 초기화
 gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
-groq_client = AsyncOpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key) if groq_key else None
-openrouter_client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=openrouter_key) if openrouter_key else None
-deepseek_client = AsyncOpenAI(base_url="https://api.deepseek.com", api_key=deepseek_key) if deepseek_key else None
-cerebras_client = AsyncOpenAI(base_url="https://api.cerebras.ai/v1", api_key=cerebras_key) if cerebras_key else None
+groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key) if groq_key else None
+openrouter_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=openrouter_key) if openrouter_key else None
+deepseek_client = OpenAI(base_url="https://api.deepseek.com", api_key=deepseek_key) if deepseek_key else None
+cerebras_client = OpenAI(base_url="https://api.cerebras.ai/v1", api_key=cerebras_key) if cerebras_key else None
 
 st.set_page_config(page_title="Ultra AI 수업 & 대용량 파일 만능 분석기", layout="wide")
 st.title("🎓 Ultra Multi-AI 대용량 파일 통합 분석 시스템")
@@ -59,22 +58,22 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-async def call_ai(provider, prompt):
+def call_ai(provider, prompt):
     try:
         if provider == "Gemini" and gemini_client:
-            res = await asyncio.to_thread(gemini_client.models.generate_content, model='gemini-1.5-flash', contents=prompt)
+            res = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
             return res.text
         elif provider == "Groq" and groq_client:
-            res = await groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
+            res = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
             return res.choices[0].message.content
         elif provider == "DeepSeek" and deepseek_client:
-            res = await deepseek_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
+            res = deepseek_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
             return res.choices[0].message.content
         elif provider == "Cerebras" and cerebras_client:
-            res = await cerebras_client.chat.completions.create(model="llama3.1-70b", messages=[{"role": "user", "content": prompt}])
+            res = cerebras_client.chat.completions.create(model="llama3.1-70b", messages=[{"role": "user", "content": prompt}])
             return res.choices[0].message.content
         elif provider == "OpenRouter" and openrouter_client:
-            res = await openrouter_client.chat.completions.create(model="meta-llama/llama-3.3-70b-instruct:free", messages=[{"role": "user", "content": prompt}])
+            res = openrouter_client.chat.completions.create(model="meta-llama/llama-3.3-70b-instruct:free", messages=[{"role": "user", "content": prompt}])
             return res.choices[0].message.content
     except Exception as e:
         return f"[{provider} 통신 오류]: {str(e)}"
@@ -82,37 +81,35 @@ async def call_ai(provider, prompt):
 
 if uploaded_files:
     combined_text_list = []
-    st.info(f"📁 총 {len(uploaded_files)}개의 파일이 업로드되었습니다. 처리 중...")
+    
+    # 업로드된 파일 파싱 과정도 로딩 표시 추가
+    with st.status("📁 파일 읽기 및 음성 변환 중...", expanded=True) as status:
+        for file in uploaded_files:
+            file_name = file.name
+            file_ext = file_name.split(".")[-1].lower()
+            file_bytes = file.getvalue()
+            file_text = ""
+            file_size_mb = len(file_bytes) / (1024 * 1024)
 
-    for file in uploaded_files:
-        file_name = file.name
-        file_ext = file_name.split(".")[-1].lower()
-        file_bytes = file.getvalue()
-        file_text = ""
-        file_size_mb = len(file_bytes) / (1024 * 1024)
+            audio_extensions = ["wav", "mp3", "m4a", "ogg", "flac", "aac", "webm", "mp4", "mpeg", "mpga"]
 
-        audio_extensions = ["wav", "mp3", "m4a", "ogg", "flac", "aac", "webm", "mp4", "mpeg", "mpga"]
-
-        # 1. 음성 및 미디어 파일 처리
-        if file_ext in audio_extensions:
-            if file_size_mb <= 25 and groq_client:
-                with st.spinner(f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) Groq Whisper 초고속 변환 중..."):
+            if file_ext in audio_extensions:
+                if file_size_mb <= 25 and groq_client:
+                    status.update(label=f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) Groq Whisper 초고속 변환 중...")
                     try:
-                        transcription = asyncio.run(groq_client.audio.transcriptions.create(
+                        transcription = groq_client.audio.transcriptions.create(
                             file=(file_name, file_bytes, f"audio/{file_ext}" if file_ext != "mp4" else "video/mp4"),
                             model="whisper-large-v3",
                             language="ko",
                             response_format="text"
-                        ))
+                        )
                         file_text = str(transcription).strip()
-                        st.success(f"✅ '{file_name}' Groq 변환 완료")
                     except Exception as e:
                         st.error(f"❌ '{file_name}' Groq 변환 오류: {e}")
-            elif gemini_client:
-                with st.spinner(f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) 대용량 파일 Gemini 멀티모달 분석 중..."):
+                elif gemini_client:
+                    status.update(label=f"🎙️ '{file_name}' ({file_size_mb:.1f}MB) 대용량 파일 Gemini 멀티모달 분석 중...")
                     try:
                         mime_type = f"audio/{file_ext}" if file_ext != "mp4" else "video/mp4"
-                        # 에러를 방지하기 위해 일반 동기 방식으로 Gemini 호출
                         res = gemini_client.models.generate_content(
                             model='gemini-1.5-flash',
                             contents=[
@@ -121,50 +118,33 @@ if uploaded_files:
                             ]
                         )
                         file_text = res.text.strip()
-                        st.success(f"✅ '{file_name}' Gemini 대용량 분석 완료")
                     except Exception as e:
                         st.error(f"❌ '{file_name}' Gemini 분석 오류: {e}")
-            else:
-                st.error("❌ API 키(GROQ_API_KEY 또는 GEMINI_API_KEY) 설정을 확인해주세요.")
+                else:
+                    st.error("❌ API 키 설정을 확인해주세요.")
 
-        # 2. PDF 문서 파일
-        elif file_ext == "pdf":
-            if HAS_PDF:
-                try:
+            elif file_ext == "pdf":
+                if HAS_PDF:
                     reader = PdfReader(io.BytesIO(file_bytes))
                     extracted = [page.extract_text() for page in reader.pages if page.extract_text()]
                     file_text = "\n".join(extracted)
-                    st.success(f"✅ '{file_name}' PDF 추출 완료")
-                except Exception as e:
-                    st.error(f"❌ '{file_name}' 읽기 오류: {e}")
-            else:
-                st.error("❌ pypdf 라이브러리가 필요합니다.")
-
-        # 3. Word 문서 파일
-        elif file_ext in ["docx", "doc"]:
-            if HAS_DOCX:
-                try:
+            elif file_ext in ["docx", "doc"]:
+                if HAS_DOCX:
                     doc = docx.Document(io.BytesIO(file_bytes))
                     extracted = [p.text for p in doc.paragraphs if p.text]
                     file_text = "\n".join(extracted)
-                    st.success(f"✅ '{file_name}' Word 추출 완료")
-                except Exception as e:
-                    st.error(f"❌ '{file_name}' 읽기 오류: {e}")
             else:
-                st.error("❌ python-docx 라이브러리가 필요합니다.")
+                for encoding in ["utf-8", "cp949", "euc-kr", "latin-1"]:
+                    try:
+                        file_text = file_bytes.decode(encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
 
-        # 4. 일반 텍스트 및 소스코드 파일
-        else:
-            for encoding in ["utf-8", "cp949", "euc-kr", "latin-1"]:
-                try:
-                    file_text = file_bytes.decode(encoding)
-                    st.success(f"✅ '{file_name}' 파일 읽기 완료")
-                    break
-                except UnicodeDecodeError:
-                    continue
+            if file_text:
+                combined_text_list.append(f"--- [파일명: {file_name}] ---\n{file_text}")
 
-        if file_text:
-            combined_text_list.append(f"--- [파일명: {file_name}] ---\n{file_text}")
+        status.update(label="✅ 모든 파일 처리 완료!", state="complete", expanded=False)
 
     full_combined_text = "\n\n".join(combined_text_list)
 
@@ -172,39 +152,46 @@ if uploaded_files:
         with st.expander("📄 추출된 전체 파일 통합 텍스트 확인"):
             st.text_area("통합 데이터 내용", full_combined_text, height=200)
 
-        if st.button("🚀 전체 파일 통합 AI 학습 노트 생성", type="primary"):
-            with st.spinner("🤖 AI가 업로드된 모든 파일의 데이터 분석 중..."):
-                async def process_pipeline():
-                    if ai_mode == "다중 AI 교차 검증 (권장)":
-                        g_res, q_res = await asyncio.gather(
-                            call_ai("Gemini", f"통합 내용 요약:\n{full_combined_text}"),
-                            call_ai("Groq", f"통합 내용 요약:\n{full_combined_text}")
-                        )
-                        cross_p = f"[Gemini 요약]: {g_res}\n[Llama 요약]: {q_res}\n두 분석을 교차 검증하여 깔끔한 노트로 정리해줘. 스타일: {note_style}"
-                        final_note = await call_ai("Gemini", cross_p)
-                    else:
-                        engine_map = {
-                            "Gemini 1.5 Flash": "Gemini", 
-                            "Groq Llama 3.3": "Groq", 
-                            "DeepSeek V3": "DeepSeek", 
-                            "Cerebras Llama 3.1": "Cerebras",
-                            "OpenRouter (Free Auto)": "OpenRouter"
-                        }
-                        final_note = await call_ai(engine_map[selected_single_ai], f"통합 내용 요약 (스타일: {note_style}):\n{full_combined_text}")
+        # 🚀 눈에 띄는 명확한 전송 버튼 생성
+        st.markdown("---")
+        if st.button("🚀 전체 파일 통합 AI 학습 노트 및 문제 생성하기", type="primary", use_container_width=True):
+            
+            # 단계별 로딩 상태바 (Progress / Status)
+            with st.status("🤖 AI 엔진들이 데이터를 정밀 분석하고 있습니다...", expanded=True) as ai_status:
+                
+                st.write("📌 [1/3] 핵심 요약 노트 및 교차 검증 중...")
+                if ai_mode == "다중 AI 교차 검증 (권장)":
+                    g_res = call_ai("Gemini", f"통합 내용 요약:\n{full_combined_text}")
+                    q_res = call_ai("Groq", f"통합 내용 요약:\n{full_combined_text}")
+                    cross_p = f"[Gemini 요약]: {g_res}\n[Llama 요약]: {q_res}\n두 분석을 교차 검증하여 깔끔한 노트로 정리해줘. 스타일: {note_style}"
+                    final_note = call_ai("Gemini", cross_p)
+                else:
+                    engine_map = {
+                        "Gemini 1.5 Flash": "Gemini", 
+                        "Groq Llama 3.3": "Groq", 
+                        "DeepSeek V3": "DeepSeek", 
+                        "Cerebras Llama 3.1": "Cerebras",
+                        "OpenRouter (Free Auto)": "OpenRouter"
+                    }
+                    final_note = call_ai(engine_map[selected_single_ai], f"통합 내용 요약 (스타일: {note_style}):\n{full_combined_text}")
 
-                    dict_task = call_ai("Gemini", f"핵심 용어 5개 및 암기 플래시카드(Q&A 5개) 생성:\n{full_combined_text}")
-                    exam_task = call_ai("Groq", f"시험/평가 예상 문제 4개(객관식 3, 서술형 1)와 정답/해설 작성:\n{full_combined_text}")
-                    
-                    dictionary, exam = await asyncio.gather(dict_task, exam_task)
-                    return final_note, dictionary, exam
+                st.write("💡 [2/3] 핵심 용어 및 플래시카드 생성 중...")
+                dictionary = call_ai("Gemini", f"핵심 용어 5개 및 암기 플래시카드(Q&A 5개) 생성:\n{full_combined_text}")
 
-                note, dictionary, exam = asyncio.run(process_pipeline())
-                st.session_state['note'] = note
-                st.session_state['dict'] = dictionary
-                st.session_state['exam'] = exam
-                st.session_state['stt_text'] = full_combined_text
+                st.write("🎯 [3/3] 시험 출제 예상 문제 제작 중...")
+                exam = call_ai("Groq", f"시험/평가 예상 문제 4개(객관식 3, 서술형 1)와 정답/해설 작성:\n{full_combined_text}")
+
+                ai_status.update(label="✨ 모든 분석 및 노트 생성이 완료되었습니다!", state="complete", expanded=False)
+
+            # 세션에 결과 저장
+            st.session_state['note'] = final_note
+            st.session_state['dict'] = dictionary
+            st.session_state['exam'] = exam
+            st.session_state['stt_text'] = full_combined_text
+            st.rerun() # 화면 새로고침하여 결과 탭 출력
 
     if 'note' in st.session_state:
+        st.markdown("---")
         t1, t2, t3, t4 = st.tabs(["📝 통합 요약 노트", "💡 용어 & 플래시카드", "🎯 예상 문제", "💬 AI Q&A 챗봇"])
         with t1:
             st.subheader("📌 교차 검증 통합 노트")
@@ -219,5 +206,6 @@ if uploaded_files:
             st.subheader("💬 AI 심화 Q&A 질문하기")
             q = st.text_input("통합 파일 내용에 대한 질문을 자유롭게 입력하세요:")
             if q:
-                ans = asyncio.run(call_ai("Cerebras" if cerebras_key else "Gemini", f"통합 내용:{st.session_state['stt_text']}\n질문:{q}"))
+                with st.spinner("🤖 AI가 답변을 작성하는 중..."):
+                    ans = call_ai("Cerebras" if cerebras_key else "Gemini", f"통합 내용:{st.session_state['stt_text']}\n질문:{q}")
                 st.info(ans)
