@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+input_*
+compressed_*
+gemini_temp_*
+wald_ultimate_backup.json
