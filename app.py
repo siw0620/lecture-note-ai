@@ -1,4 +1,5 @@
 import streamlit as st
+import contextlib
 import os
 import io
 import time
@@ -398,13 +399,11 @@ if 'note' in st.session_state:
             with st.spinner("⚡ 샌드박스 환경에서 실행 중..."):
                 if lang_choice == "Python":
                     try:
-                        # 안전한 파이썬 격리 실행
-                        old_stdout = sys.stdout if 'sys' in globals() else None
-                        import io, sys
+                        # print 출력을 화면에 보여 주려고 잠시 가로챈다.
+                        # 주의: 격리된 실행이 아니다. 이 코드는 앱을 실행한 컴퓨터에서 그대로 돈다.
                         new_stdout = io.StringIO()
-                        sys.stdout = new_stdout
-                        exec(code_input, {})
-                        sys.stdout = old_stdout
+                        with contextlib.redirect_stdout(new_stdout):
+                            exec(code_input, {})
                         output = new_stdout.getvalue()
                         st.success("✅ 실행 성공!")
                         st.code(output if output else "(출력 결과가 없습니다)")
